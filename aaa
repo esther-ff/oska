@@ -1,0 +1,107 @@
+pub fn tokenize(&'d mut self) -> Vec<MdToken<'b>> {
+        // allocating 3x the stream's length is probably overkill
+        // but allows us to skip many heap allocations.
+        let mut dest: Vec<MdToken> = Vec::with_capacity(self.stream.len() * 3);
+
+        loop {
+            let ch = match self.go() {
+                None => break,
+
+                Some(ch) => ch,
+            };
+
+            match ch {
+                // Heading
+                "#" => {
+                    // parse a heading first style
+                    // so like this
+                    // # Heading
+
+                    let mut heading_count = 1_usize;
+
+                    self.count("#", &mut heading_count);
+                    match get_till(self, "\n") {
+                        (Some(text), _) => {
+                            let token = MdToken::Heading(heading_count, text);
+
+                            dest.push(token)
+                        }
+                        (None, true) => return dest,
+
+                        (None, false) => todo!(), // might be for error handling?
+                    }
+                }
+
+                // Italic or bold
+                ch if ch == "_" || ch == "*" => {
+                    // checks if second character is also the same
+                    // ex.
+                    // **This text is BOLD**
+                    // ^^                 ^^
+                    let (is_doubled_char, is_eof) = is_this(self, ch);
+
+                    // replace prob
+                    if is_doubled_char {
+                        self.eat();
+                    }
+
+                    // we find another occurence of the character
+                    // like
+                    // **This text is bold**
+                    //                    ^
+                    let text = match get_till(self, ch) {
+                        (None, true) => todo!(), // save as just regular text?
+
+                        (None, false) => todo!(), // error handling?
+
+                        (Some(str), _) => str,
+                    };
+
+                    let token = if is_doubled_char {
+                        // check if the next character is also a `*` or `_`
+                        // like
+                        // **This text is bold**
+                        //                     ^
+                        let (is_ending_char_doubled, is_eof) = is_this(self, ch);
+
+                        if is_ending_char_doubled {
+                            MdToken::Bold(text)
+                        } else {
+                            MdToken::Italic(text)
+                        }
+                    } else {
+                        MdToken::Italic(text)
+                    };
+
+                    dest.push(token)
+                }
+
+                // Code
+                "`" => {
+                    //
+
+                    let (is_multiline, is_eof) = is_this2(self, "`");
+
+                    if is_multiline {
+                        // next characters till a new line will be the language name
+                        let lang_name = match get_till(self, "\n") {
+                            // EOF!
+                            (None, _) => return dest,
+
+                            (Some(lang_name), _) => lang_name,
+                        };
+
+                        let is_lang_named = lang_name.len() != 0;
+                    }
+                }
+
+                // Blockquotes
+                ">" => loop {},
+
+                _ => todo!(),
+            }
+        }
+
+        dest
+    }
+}
