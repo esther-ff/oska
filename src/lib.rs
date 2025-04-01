@@ -1,3 +1,5 @@
+mod ast;
+
 mod unicode;
 
 mod html;

@@ -1,3 +1,4 @@
+use crate::ast;
 use crate::unicode::{Utf8, utf8};
 use std::error::Error;
 use std::fmt;
@@ -180,9 +181,9 @@ where
 
                 let token = if is_doubled && self.is_next(target).unwrap_or(false) {
                     self.iter.eat();
-                    Token::Italic(Box::new(Token::Paragraph(text)))
+                    ast::Phrasing::Italic(Box::new(Token::Paragraph(text)))
                 } else {
-                    Token::Bold(Box::new(Token::Paragraph(text)))
+                    ast::Phrasing::Bold(Box::new(Token::Paragraph(text)))
                 };
 
                 self.root.push(token);
@@ -194,9 +195,9 @@ where
     // for the above
     // nested italics/bolds could be handled with recursion.
 
-    pub fn lex(&'lx mut self) {
+    pub fn lex(&'lx mut self, iter: &mut Utf8<'lx>) {
         loop {
-            let char = match self.iter.peek() {
+            let char = match iter.peek() {
                 None => break,
 
                 Some(char) => char,
@@ -205,12 +206,24 @@ where
             match char {
                 "*" | "_" => self.maybe_bold_italic(),
 
-                "\n" => self.iter.eat(),
+                "\n" => iter.eat(),
                 _ => self.paragraph(),
             }
         }
 
         dbg!(&self.root);
+    }
+
+    // for recursion?
+    pub fn lex_utf8(&'lx mut self, data: &'lx str) {
+        let bytes = data.as_bytes();
+
+        bytes.into_iter().for_each(|ch| match ch {
+            b'*' | b'_' => self.maybe_bold_italic(),
+
+            // b'\n' => iter.eat(),
+            _ => self.paragraph(),
+        });
     }
 
     pub fn root(&self) -> &[Token<'lx>] {
