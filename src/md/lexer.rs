@@ -1,4 +1,4 @@
-use crate::ast;
+use crate::md::ast;
 use crate::unicode::{Utf8, utf8};
 use std::error::Error;
 use std::fmt;
@@ -56,7 +56,7 @@ where
             Some(str) => str,
         };
 
-        dbg!((val, target));
+        // dbg!((val, target));
 
         let is_correct = val == target;
 
@@ -143,8 +143,6 @@ where
             None => return,
         };
 
-        dbg!((target, self.iter.peek()));
-
         let mut pos = self.iter.pos();
 
         // if this is equal to the target char
@@ -174,6 +172,7 @@ where
 
             if char == target {
                 let curr_pos = self.iter.pos();
+
                 let text = self
                     .iter
                     .get_from_str(pos, curr_pos - 1)
@@ -181,9 +180,9 @@ where
 
                 let token = if is_doubled && self.is_next(target).unwrap_or(false) {
                     self.iter.eat();
-                    ast::Phrasing::Italic(Box::new(Token::Paragraph(text)))
+                    Token::Italic(Box::new(Token::Paragraph(text)))
                 } else {
-                    ast::Phrasing::Bold(Box::new(Token::Paragraph(text)))
+                    Token::Bold(Box::new(Token::Paragraph(text)))
                 };
 
                 self.root.push(token);
@@ -195,9 +194,9 @@ where
     // for the above
     // nested italics/bolds could be handled with recursion.
 
-    pub fn lex(&'lx mut self, iter: &mut Utf8<'lx>) {
+    pub fn lex(&'lx mut self) {
         loop {
-            let char = match iter.peek() {
+            let char = match self.iter.peek() {
                 None => break,
 
                 Some(char) => char,
@@ -206,7 +205,7 @@ where
             match char {
                 "*" | "_" => self.maybe_bold_italic(),
 
-                "\n" => iter.eat(),
+                "\n" => self.iter.eat(),
                 _ => self.paragraph(),
             }
         }
@@ -214,16 +213,8 @@ where
         dbg!(&self.root);
     }
 
-    // for recursion?
-    pub fn lex_utf8(&'lx mut self, data: &'lx str) {
-        let bytes = data.as_bytes();
-
-        bytes.into_iter().for_each(|ch| match ch {
-            b'*' | b'_' => self.maybe_bold_italic(),
-
-            // b'\n' => iter.eat(),
-            _ => self.paragraph(),
-        });
+    pub fn start(&'lx mut self) {
+        self.lex();
     }
 
     pub fn root(&self) -> &[Token<'lx>] {

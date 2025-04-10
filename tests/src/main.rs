@@ -27,6 +27,8 @@ mod tests {
             "_ahaha_\n",
             "__aaaaaa__\n",
             "**bbbbbbb**\n",
+            "***bbbbbbb***\n",
+            "___bbbbbbb___\n",
             "europe\n\n",
             "newblock\n",
             "test"
@@ -36,6 +38,6 @@ mod tests {
 
         let mut lexer = lexer::MdLexer::new(text).expect("failed to create lexer");
 
-        lexer.lex();
+        lexer.start();
     }
 }

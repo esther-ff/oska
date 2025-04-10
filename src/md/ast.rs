@@ -1,8 +1,8 @@
 #[derive(Debug)]
 pub enum Phrasing<'p> {
     Break,
-    Bold(Box<Phrasing>),
-    Italic(Box<Phrasing>),
+    Bold(Box<Phrasing<'p>>),
+    Italic(Box<Phrasing<'p>>),
     Literal(&'p str),
     Code(Code<'p>),
 }

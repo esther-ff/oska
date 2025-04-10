@@ -70,7 +70,6 @@ where
                         // rewrite...
                         if let Some(val) = self.peek() {
                             if val != target {
-                                println!("End of count_chars fn");
                                 return count;
                             }
                         }
