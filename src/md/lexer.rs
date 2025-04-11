@@ -1,5 +1,5 @@
 use crate::md::ast;
-use crate::unicode::{Utf8, utf8};
+use crate::unicode::{utf8, Utf8};
 use std::error::Error;
 use std::fmt;
 use std::{io, str};

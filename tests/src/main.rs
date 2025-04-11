@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use oska::lexer;
+    use oska::lexer_again;
 
     // #[test]
     // fn create_lexer_only_text() {
@@ -36,7 +36,7 @@ mod tests {
 
         println!("{}", text);
 
-        let mut lexer = lexer::MdLexer::new(text).expect("failed to create lexer");
+        let lexer = lexer_again::Lexer::new(text.as_bytes().to_vec());
 
         lexer.start();
     }
