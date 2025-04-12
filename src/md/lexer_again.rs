@@ -89,27 +89,33 @@ impl Lexer {
     }
 
     // spits out a line
-    pub fn line(&mut self) -> Option<&str> {
+    pub fn line(&mut self) -> &str {
         self.till(NEWLINE)
     }
 
     // goes till it finds a character
-    pub fn till(&mut self, target: u8) -> Option<&str> {
+    pub fn till(&mut self, target: u8) -> &str {
         let start: usize = self.cur;
 
         let mut count = self.cur;
 
         loop {
             match self.next() {
-                None => return None,
-                Some(val) => {
-                    // dbg!(str::from_utf8(&[val]));
+                None => {
+                    return self
+                        .chars
+                        .get(start..count)
+                        .map(|x| unsafe { str::from_utf8_unchecked(x) })
+                        .unwrap();
+                }
 
+                Some(val) => {
                     if val == target {
                         let string = self
                             .chars
                             .get(start..count)
-                            .map(|x| unsafe { str::from_utf8_unchecked(x) });
+                            .map(|x| unsafe { str::from_utf8_unchecked(x) })
+                            .unwrap();
 
                         return string;
                     } else {
@@ -119,7 +125,8 @@ impl Lexer {
                             let string = self
                                 .chars
                                 .get(start..count)
-                                .map(|x| unsafe { str::from_utf8_unchecked(x) });
+                                .map(|x| unsafe { str::from_utf8_unchecked(x) })
+                                .unwrap();
 
                             return string;
                         }
@@ -285,10 +292,11 @@ impl Lexer {
                 .unwrap()
                 .to_string()
         } else {
-            match self.till(target) {
-                Some(val) => val.to_owned(),
-                None => return,
-            }
+            // match self.till(target) {
+            //     Some(val) => val.to_owned(),
+            //     None => return,
+            // }
+            self.till(target).to_owned()
         };
 
         self.eat();
@@ -307,6 +315,41 @@ impl Lexer {
         };
 
         self.root.push(token);
+    }
+
+    fn parse_code_block(&mut self, blk_type: CodeBlockType) {
+        use CodeBlockType::*;
+
+        match blk_type {
+            SingleLine(is_four_space) => {
+                //
+                if is_four_space {
+                    // the main loop in `lex` does not advance this
+                    self.advance_by(4);
+
+                    let inside = self.till(NEWLINE);
+
+                    let block = CodeBlock {
+                        lang: None,
+                        data: None,
+                        style: blk_type,
+                        contents: inside.to_owned(),
+                    };
+
+                    self.root.push(Token::Code(block))
+                // if not a four space one, it may be a singular backtick
+                } else {
+                    todo!()
+
+                    // todo parse this shit
+                }
+            }
+
+            Multiline => {
+                // todo parse this shit
+                todo!()
+            }
+        }
     }
 
     fn paragraph(&mut self) {
@@ -368,6 +411,18 @@ impl Lexer {
                 }
 
                 SPACE => {
+                    let is_code_block = match self.chars.get(self.cur..self.cur + 4) {
+                        None => false,
+                        Some(val) => val == [32, 32, 32, 32],
+                    };
+
+                    if is_code_block {
+                        let style = CodeBlockType::SingleLine(true);
+
+                        self.parse_code_block(style);
+                        continue;
+                    };
+
                     let is_next_character_space =
                         self.peek2().map_or(false, |found| found == SPACE);
 
@@ -375,6 +430,7 @@ impl Lexer {
                         self.root.push(Token::Breakline);
                     }
                 }
+
                 NEWLINE => {
                     let is_next_character_newline =
                         self.peek2().map_or(false, |found| found == NEWLINE);
@@ -402,6 +458,27 @@ impl Lexer {
 }
 
 #[derive(Debug)]
+enum CodeBlockType {
+    // a single line code block
+    // the inner bool value means:
+    //
+    //    true: it was made with a block of 4 spaces (`    `)
+    //    false: it was made with a singular backtick (`)
+    SingleLine(bool),
+
+    // a multiline code block
+    Multiline,
+}
+
+#[derive(Debug)]
+struct CodeBlock {
+    style: CodeBlockType,
+    lang: Option<String>,
+    data: Option<String>,
+    contents: String,
+}
+
+#[derive(Debug)]
 pub enum Token {
     Breakline,
     Underline(String),
@@ -410,4 +487,5 @@ pub enum Token {
     Italic(String),
     Paragraph(String),
     Root(Vec<Token>),
+    Code(CodeBlock),
 }

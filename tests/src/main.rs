@@ -25,6 +25,7 @@ mod tests {
             "*nom de dieu*\n",
             "***\n",
             "---\n",
+            "    HAH!\n",
             "___\n",
             "*-*\n",
             "_ahaha_\n",
