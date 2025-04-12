@@ -24,6 +24,9 @@ mod tests {
         let text = concat!(
             "*nom de dieu*\n",
             "***\n",
+            "---\n",
+            "___\n",
+            "*-*\n",
             "_ahaha_\n",
             "__aaaaaa__\n",
             "**bbbbbbb**\n",

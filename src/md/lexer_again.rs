@@ -18,13 +18,12 @@ enum State {
 const NEWLINE: u8 = b'\n';
 const ASTERISK: u8 = b'*';
 const UNDERSCORE: u8 = b'_';
-
-const UNDERLINE_STYLE_BREAK: &str = "___\n";
-const ASTERISK_STYLE_BREAK: &str = "***\n";
+const LINE: u8 = b'-';
+const SPACE: u8 = b' ';
 
 macro_rules! dbg_char {
     ($ch: expr) => {
-        dbg!(core::str::from_utf8(&[$ch]))
+        let _ = dbg!(core::str::from_utf8(&[$ch]))
     };
 }
 
@@ -32,6 +31,17 @@ macro_rules! to_str {
     ($expr: expr) => {
         unsafe { core::str::from_utf8_unchecked($expr) }
     };
+}
+
+impl Iterator for Lexer {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<u8> {
+        let val = self.chars.get(self.cur).copied();
+        self.cur += 1;
+
+        return val;
+    }
 }
 
 impl Lexer {
@@ -54,15 +64,20 @@ impl Lexer {
         self.chars.get(self.cur).copied()
     }
 
-    pub fn next(&mut self) -> Option<u8> {
-        let val = self.chars.get(self.cur).copied();
-        self.cur += 1;
-
-        return val;
+    pub fn peek2(&self) -> Option<u8> {
+        self.chars.get(self.cur + 1).copied()
     }
 
     pub fn eat(&mut self) {
         self.cur += 1
+    }
+
+    pub fn set_position(&mut self, num: usize) {
+        self.cur = num
+    }
+
+    pub fn advance_by(&mut self, num: usize) {
+        self.cur += num
     }
 
     // goes back
@@ -114,47 +129,6 @@ impl Lexer {
         }
     }
 
-    // i don't know
-    fn till_outside<const STEPS: usize>(&mut self, target: u8) -> Option<&str> {
-        let pos = self.cur;
-        let mut end = self.cur;
-
-        let arr = &[target; STEPS];
-        let victim: &str = str::from_utf8(arr).unwrap();
-
-        let mut scratch = [0; STEPS];
-        let mut count = 0;
-
-        loop {
-            if count == STEPS {
-                let buf = unsafe { str::from_utf8_unchecked(&scratch) };
-
-                dbg!(buf);
-                let is_next_diff = self.peek().map_or(false, |x| x != target);
-
-                if buf == victim && is_next_diff {
-                    let string = unsafe {
-                        str::from_utf8_unchecked(self.chars.get(pos..end - STEPS).unwrap())
-                    };
-
-                    return Some(string);
-                }
-
-                count = 0;
-            };
-
-            let char = match self.next() {
-                None => return None,
-                Some(val) => val,
-            };
-
-            scratch[count] = char;
-
-            count += 1;
-            end += 1
-        }
-    }
-
     // Checks if the next char fits the predicate
     fn is_next_target(&self, t: u8) -> bool {
         //dbg!(str::from_utf8(&[t]));
@@ -167,19 +141,77 @@ impl Lexer {
         )
     }
 
+    fn is_next_pred<F>(&mut self, f: F) -> bool
+    where
+        F: FnOnce(u8) -> bool,
+    {
+        match self.next() {
+            None => {
+                self.cur -= 1;
+                false
+            }
+
+            Some(val) => {
+                // dbg_char!(val);
+                if f(val) {
+                    return true;
+                } else {
+                    self.cur -= 1;
+                    false
+                }
+            }
+        }
+    }
+
     // Checks if the sequence might be a style break
     fn is_style_break(&mut self) -> bool {
-        let pos = self.cur;
-        let forward_pos = self.cur + 4;
+        let initial_pos = self.cur;
 
-        let is_three_chars = self.chars.get(pos..forward_pos).map_or(false, |slice| {
-            let temp = unsafe { str::from_utf8_unchecked(slice) };
-            //dbg!(temp);
+        // function to verify if the character can form a style break.
+        let verify = |char| match char {
+            ASTERISK => true,
+            UNDERSCORE => true,
+            LINE => true,
 
-            temp == UNDERLINE_STYLE_BREAK || temp == ASTERISK_STYLE_BREAK
-        });
+            _ => false,
+        };
 
-        is_three_chars
+        let first = self.is_next_pred(verify);
+        if !first {
+            return false;
+        }
+
+        let second = self.is_next_pred(verify);
+        if !second {
+            self.set_position(self.cur - 1);
+            return false;
+        };
+
+        let third = self.is_next_pred(verify);
+        if !third {
+            self.set_position(self.cur - 2);
+            return false;
+        };
+
+        let mut is_style_break = true;
+
+        while let Some(char) = self.next() {
+            match char {
+                ASTERISK | UNDERSCORE | LINE => {}
+
+                NEWLINE => {
+                    break;
+                }
+
+                _ => {
+                    self.set_position(initial_pos);
+                    is_style_break = false;
+                    break;
+                }
+            }
+        }
+
+        is_style_break
     }
 
     // matches a repeating sequence of characters
@@ -233,7 +265,7 @@ impl Lexer {
             while let Some(val) = self.next() {
                 let peeked_next_val = self.peek().map_or(false, |v| v == target);
                 if val == target && peeked_next_val {
-                    self.cur += 1;
+                    self.advance_by(1);
 
                     let is_different = self.peek().map_or(false, |v| v != target);
 
@@ -278,35 +310,38 @@ impl Lexer {
     }
 
     fn paragraph(&mut self) {
-        let pos = self.cur;
-        loop {
-            let char = match self.next() {
-                Some(char) => char,
-                None => break,
-            };
+        let initial_pos = self.cur;
 
-            // do something more !
+        while let Some(char) = self.next() {
+            let is_newline = char == NEWLINE;
+            let is_next_newline = self.is_next_target(NEWLINE);
 
-            // if the character we detected is a newline
-            let is_newline = char == b'\n';
-            let is_next_newline = self.is_next_target(b'\n');
+            // if it's not a double `\n`
+            // it should be replaced with a space
+            if is_newline && !is_next_newline {
+                *self.chars.get_mut(self.cur - 1).unwrap() = SPACE;
+            }
 
+            // if it is a double `\n`
+            // it becomes a `BreakLine`
             if is_newline && is_next_newline {
-                let current_pos = self.cur;
-
-                self.eat();
-                let part = self.chars.get(pos - 1..current_pos).expect("infallible");
-
-                let actual = unsafe { str::from_utf8_unchecked(part) }.to_owned();
-
-                self.root.push(Token::Paragraph(actual));
-
-                // dbg_char!(self.peek().unwrap()); <-- rest of lines somehow get lost?
-                // fix!
-
+                self.root.push(Token::Breakline);
                 break;
             }
         }
+
+        let current_pos = self.cur;
+
+        //self.eat();
+
+        let part = self
+            .chars
+            .get(initial_pos..current_pos - 1)
+            .expect("infallible");
+
+        let actual = unsafe { str::from_utf8_unchecked(part) }.to_owned();
+
+        self.root.push(Token::Paragraph(actual));
     }
 
     fn _print_residual(&self) {
@@ -322,24 +357,38 @@ impl Lexer {
             };
 
             match char {
-                ASTERISK | UNDERSCORE => {
+                ASTERISK | UNDERSCORE | LINE => {
                     // Checks for a style break
                     // or bold or italics.
                     if self.is_style_break() {
                         self.root.push(Token::StyleBreak);
-
-                        self.cur += 3;
                     } else {
                         self.bold_or_italic()
                     }
                 }
 
-                // this should be changed.
-                b'\n' => {
-                    self.eat();
+                SPACE => {
+                    let is_next_character_space =
+                        self.peek2().map_or(false, |found| found == SPACE);
+
+                    if is_next_character_space {
+                        self.root.push(Token::Breakline);
+                    }
+                }
+                NEWLINE => {
+                    let is_next_character_newline =
+                        self.peek2().map_or(false, |found| found == NEWLINE);
+
+                    if is_next_character_newline {
+                        self.root.push(Token::Breakline)
+                    }
+
+                    // if `is_next_character_newline` is false
+                    // we advance by 1 character
+                    // if it's true, we advance by 2
+                    self.advance_by(1 + is_next_character_newline as usize);
                 }
 
-                // this too
                 _ => self.paragraph(),
             }
         }
@@ -354,6 +403,7 @@ impl Lexer {
 
 #[derive(Debug)]
 pub enum Token {
+    Breakline,
     Underline(String),
     StyleBreak,
     Bold(String),
@@ -361,6 +411,3 @@ pub enum Token {
     Paragraph(String),
     Root(Vec<Token>),
 }
-
-// GRAND IDEA:
-// USE A STATE MACHINE
