@@ -20,6 +20,7 @@ const ASTERISK: u8 = b'*';
 const UNDERSCORE: u8 = b'_';
 const LINE: u8 = b'-';
 const SPACE: u8 = b' ';
+const BACKTICK: u8 = b'`';
 
 macro_rules! dbg_char {
     ($ch: expr) => {
@@ -94,6 +95,9 @@ impl Lexer {
     }
 
     // goes till it finds a character
+    // TODO: LIMIT THIS TO ONLY A PARAGRAPH
+    // etc check for double newline!
+    //
     pub fn till(&mut self, target: u8) -> &str {
         let start: usize = self.cur;
 
@@ -305,13 +309,13 @@ impl Lexer {
         let token = if is_double && is_double_end {
             self.eat();
             match target {
-                UNDERSCORE => Token::Underline(para.to_owned()),
-                ASTERISK => Token::Bold(para.to_owned()),
+                UNDERSCORE => Inline::underline(para.to_owned()),
+                ASTERISK => Inline::bold(para.to_owned()),
 
                 _ => unreachable!(),
             }
         } else {
-            Token::Italic(para.to_owned())
+            Inline::italic(para.to_owned())
         };
 
         self.root.push(token);
@@ -321,28 +325,20 @@ impl Lexer {
         use CodeBlockType::*;
 
         match blk_type {
-            SingleLine(is_four_space) => {
-                //
-                if is_four_space {
-                    // the main loop in `lex` does not advance this
-                    self.advance_by(4);
+            SingleLine => {
+                // the main loop in `lex` does not advance this
+                self.advance_by(4);
 
-                    let inside = self.till(NEWLINE);
+                let inside = self.till(NEWLINE);
 
-                    let block = CodeBlock {
-                        lang: None,
-                        data: None,
-                        style: blk_type,
-                        contents: inside.to_owned(),
-                    };
+                let block = CodeBlock {
+                    lang: None,
+                    data: None,
+                    style: blk_type,
+                    contents: inside.to_owned(),
+                };
 
-                    self.root.push(Token::Code(block))
-                // if not a four space one, it may be a singular backtick
-                } else {
-                    todo!()
-
-                    // todo parse this shit
-                }
+                self.root.push(Token::Code(block))
             }
 
             Multiline => {
@@ -387,9 +383,145 @@ impl Lexer {
         self.root.push(Token::Paragraph(actual));
     }
 
-    fn _print_residual(&self) {
-        let string = unsafe { str::from_utf8_unchecked(&self.chars[self.cur..]) };
-        println!("residual string: {}", string);
+    fn _bold_or_italic(&mut self, target: u8) -> Inline {
+        assert!(
+            target == ASTERISK || target == UNDERSCORE,
+            "invalid character provided to `bold_or_italic`"
+        );
+
+        // we know we have atleast 1 target char consumed
+        let initial = self.cur;
+        let double = self.is_next_target(target);
+
+        // we can assume that the intended thing here
+        // are doubled characters like: `**`
+        let mut node = if double {
+            let style = match target {
+                ASTERISK => InlineType::Bold,
+                UNDERSCORE => InlineType::Underline,
+
+                _ => unreachable!(),
+            };
+
+            Inline::new(style)
+        } else {
+            Inline::new(InlineType::Italic)
+        };
+
+        let mut double_end = false;
+        let start_pos = self.cur;
+        let mut count = 0;
+
+        if double {
+            while let Some(val) = self.next() {
+                let peeked_next_val = self.peek().map_or(false, |v| v == target);
+                if val == target && peeked_next_val {
+                    self.advance_by(1);
+
+                    let is_different = self.peek().map_or(false, |v| v != target);
+
+                    if is_different {
+                        self.cur -= 1;
+                        double_end = true;
+                        break;
+                    }
+
+                    self.cur -= 1;
+                }
+
+                count += 1;
+            }
+
+            let text = str::from_utf8(self.chars.get(start_pos..start_pos + count).unwrap())
+                .unwrap()
+                .to_string();
+
+            let inline_text = Inline::new(InlineType::Text(text));
+
+            node.set_inner(inline_text);
+        } else {
+            // match self.till(target) {
+            //     Some(val) => val.to_owned(),
+            //     None => return,
+            // }
+            let text = self.till(target).to_owned();
+
+            node.set_inner(Inline::new(InlineType::Text(text)));
+        };
+
+        if !double_end {
+            node.set_style(InlineType::Italic);
+        };
+
+        node
+    }
+
+    fn text(&mut self) -> Inline {
+        todo!();
+    }
+
+    fn _paragraph(&mut self) -> Token {
+        let mut inlines = Vec::new();
+
+        while let Some(char) = self.next() {
+            match char {
+                ASTERISK | UNDERSCORE => inlines.push(self._bold_or_italic()),
+
+                NEWLINE => {
+                    let double_newline = self.is_next_target(NEWLINE);
+
+                    if double_newline {
+                        self.eat();
+                        break;
+                    }
+                }
+
+                _ => inlines.push(self.text()),
+            };
+        }
+
+        todo!();
+    }
+
+    fn _lex(&mut self) -> Token {
+        let char = match self.peek() {
+            Some(val) => val,
+            None => return Token::Eof,
+        };
+
+        match char {
+            ASTERISK | UNDERSCORE | LINE => {
+                // Checks for a style break
+                // or bold or italics.
+                if self.is_style_break() {
+                    Token::StyleBreak
+                } else {
+                    self._paragraph()
+                }
+            }
+
+            BACKTICK => {
+                // we are at 1 detected backtick
+                let initial = self.cur;
+
+                self.till(BACKTICK);
+
+                // our cursor is at the first character after the backtick
+                // therefore initial - cur is the amount of backticks
+                let amnt_of_backticks = self.cur - initial;
+
+                // less than 3 means a inline element
+                // emit a paragraph
+                if amnt_of_backticks < 3 {
+                    let para = self.till(BACKTICK);
+                } else {
+                }
+
+                todo!();
+            }
+
+            _ => self._paragraph(),
+        }
     }
 
     fn lex(&mut self) {
@@ -417,7 +549,7 @@ impl Lexer {
                     };
 
                     if is_code_block {
-                        let style = CodeBlockType::SingleLine(true);
+                        let style = CodeBlockType::SingleLine;
 
                         self.parse_code_block(style);
                         continue;
@@ -428,6 +560,24 @@ impl Lexer {
 
                     if is_next_character_space {
                         self.root.push(Token::Breakline);
+                    }
+                }
+
+                BACKTICK => {
+                    // we are at 1 detected backtick
+                    let initial = self.cur;
+
+                    self.till(BACKTICK);
+
+                    // our cursor is at the first character after the backtick
+                    // therefore initial - cur is the amount of backticks
+                    let amnt_of_backticks = self.cur - initial;
+
+                    // less than 3 means a inline element
+                    // emit a paragraph
+                    if amnt_of_backticks < 3 {
+                        let para = self.till(BACKTICK);
+                    } else {
                     }
                 }
 
@@ -458,13 +608,42 @@ impl Lexer {
 }
 
 #[derive(Debug)]
+pub enum InlineType {
+    Code,
+    Bold,
+    Italic,
+    Underline,
+    Text(String),
+}
+
+#[derive(Debug)]
+pub struct Inline {
+    style: InlineType,
+    inner: Option<Box<Inline>>,
+}
+
+impl Inline {
+    fn new(style: InlineType) -> Self {
+        Self { inner: None, style }
+    }
+
+    fn set_inner(&mut self, val: Inline) {
+        self.inner = Some(Box::new(val));
+    }
+
+    fn set_style(&mut self, style: InlineType) {
+        self.style = style;
+    }
+}
+
+#[derive(Debug)]
 enum CodeBlockType {
     // a single line code block
     // the inner bool value means:
     //
     //    true: it was made with a block of 4 spaces (`    `)
     //    false: it was made with a singular backtick (`)
-    SingleLine(bool),
+    SingleLine,
 
     // a multiline code block
     Multiline,
@@ -481,11 +660,23 @@ struct CodeBlock {
 #[derive(Debug)]
 pub enum Token {
     Breakline,
-    Underline(String),
+    // Underline(String),
     StyleBreak,
-    Bold(String),
-    Italic(String),
-    Paragraph(String),
+    // Bold(String),
+    // Italic(String),
+    Paragraph(Vec<Inline>),
     Root(Vec<Token>),
     Code(CodeBlock),
+
+    Eof,
+}
+
+impl Token {
+    pub fn is_eof(&self) -> bool {
+        match &self {
+            &Token::Eof => true,
+
+            _ => false,
+        }
+    }
 }
