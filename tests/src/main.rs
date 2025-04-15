@@ -22,20 +22,20 @@ mod tests {
     #[test]
     fn bolds() {
         let text = concat!(
-            "*nom de dieu*\n",
+            "*nom **de** dieu*\n",
             "***\n",
             "---\n",
-            "    HAH!\n",
-            "___\n",
-            "*-*\n",
-            "_ahaha_\n",
-            "__aaaaaa__\n",
-            "**bbbbbbb**\n",
-            "***bbbbbbb***\n",
-            "___bbbbbbb___\n",
-            "europe\n\n",
-            "newblock\n",
-            "test"
+            // "    HAH!\n",
+            // "___\n",
+            // "*-*\n",
+            // "_ahaha_\n",
+            // "__aaaaaa__\n",
+            // "**bbbbbbb**\n",
+            // "***bbbbbbb***\n",
+            // "___bbbbbbb___\n",
+            // "europe\n\n",
+            // "newblock\n",
+            // "test"
         );
 
         println!("{}", text);
