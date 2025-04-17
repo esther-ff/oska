@@ -437,13 +437,14 @@ impl Lexer {
         let mut inlines = Vec::new();
 
         while let Some(char) = self.next() {
+            dbg!(str::from_utf8(&[char]));
             match char {
                 ASTERISK => {
                     // self.cur -= 1;
-                    let is_style_break = dbg!(self.is_next_pred(|x| x == ASTERISK))
-                        && dbg!(self.is_next_pred(|x| x == ASTERISK));
+                    let is_style_break = self.is_next_pred(|x| x == ASTERISK)
+                        && self.is_next_pred(|x| x == ASTERISK);
 
-                    dbg_char!(self);
+                    // dbg_char!(self);
 
                     if is_style_break {
                         self.cur -= 3;
@@ -465,13 +466,11 @@ impl Lexer {
                 NEWLINE => {
                     let double_newline = self.is_next_target(NEWLINE);
 
-                    dbg!(self.peek());
+                    dbg_char!(self);
 
                     if double_newline {
-                        self.advance_by(2);
-                        break;
-                    } else {
                         self.advance_by(1);
+                        break;
                     }
                 }
 
