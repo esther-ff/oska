@@ -1,4 +1,5 @@
 use core::str;
+use std::str::Matches;
 
 pub struct Lexer {
     chars: Box<[u8]>,
@@ -12,6 +13,26 @@ const UNDERSCORE: u8 = b'_';
 const LINE: u8 = b'-';
 // const SPACE: u8 = b' ';
 const BACKTICK: u8 = b'`';
+
+enum Delim {
+    Asterisk,
+    Underscore,
+    Backtick,
+    Line,
+
+    BraceLeft,
+    BraceRight,
+
+    ExBraceLeft,
+    ExBraceRight,
+}
+
+struct DelimQuery {
+    delim: Delim,
+    amnt: usize,
+    start: usize,
+    end: usize,
+}
 
 macro_rules! dbg_char {
     ($ch: expr) => {
@@ -54,11 +75,6 @@ impl Lexer {
     /// Peek one char forward.
     pub fn peek(&self) -> Option<u8> {
         self.chars.get(self.cur).copied()
-    }
-
-    /// Peek two chars forward.
-    pub fn peek2(&self) -> Option<u8> {
-        self.chars.get(self.cur + 1).copied()
     }
 
     /// Sets the position of the cursor
@@ -162,6 +178,7 @@ impl Lexer {
 
     /// Goes through characters until it finds any char
     /// different than the target
+    /// TODO: respect paragraphs
     fn till_not(&mut self, target: u8) -> usize {
         let mut count = 0;
 
@@ -290,6 +307,43 @@ impl Lexer {
                 todo!()
             }
         }
+    }
+
+    fn bold_or_italic_z(&mut self, target: u8, array: &mut Vec<Inline>) {
+        debug_assert!(
+            target == ASTERISK || target == UNDERSCORE,
+            "invalid character provided to `bold_or_italic`"
+        );
+
+        self.go_back_by(1);
+
+        let mut delim_vec: Vec<DelimQuery> = Vec::new();
+
+        while let Some(ch) = self.next() {
+            match ch {
+                ASTERISK => {
+                    let start = self.cur - 1;
+                    let amnt = self.till_not(ASTERISK);
+
+                    let query = DelimQuery {
+                        delim: Delim::Asterisk,
+                        amnt: amnt + 1,
+                        start,
+                        end: self.cur,
+                    };
+
+                    delim_vec.push(query);
+                }
+
+                _ => todo!(),
+            }
+        }
+
+        // somehow do it okay
+
+        let initial_pos = self.cur;
+
+        if self.is_next_target(target) {};
     }
 
     /// Parses italics and bolds if it can
@@ -432,6 +486,41 @@ impl Lexer {
         }
     }
 
+    fn inline(&mut self, inlines: &mut Vec<Inline>) {
+        while let Some(char) = self.next() {
+            dbg!(str::from_utf8(&[char]));
+            match char {
+                ASTERISK => {
+                    self.bold_or_italic(ASTERISK, inlines);
+                }
+
+                UNDERSCORE => self.bold_or_italic(UNDERSCORE, inlines),
+
+                LINE => {
+                    if self.is_style_break() {
+                        break;
+                    }
+                }
+
+                NEWLINE => {
+                    let double_newline = self.is_next_target(NEWLINE);
+
+                    dbg_char!(self);
+
+                    // a double newline
+                    // means the end of a paragraph
+                    if double_newline {
+                        self.advance_by(1);
+                        break;
+                    }
+                }
+
+                _ => inlines.push(self.text()),
+            };
+        }
+        todo!()
+    }
+
     /// Parses a paragraph
     fn paragraph(&mut self) -> Token {
         let mut inlines = Vec::new();
@@ -468,6 +557,8 @@ impl Lexer {
 
                     dbg_char!(self);
 
+                    // a double newline
+                    // means the end of a paragraph
                     if double_newline {
                         self.advance_by(1);
                         break;
@@ -479,11 +570,6 @@ impl Lexer {
         }
 
         Token::Paragraph(inlines)
-    }
-
-    fn inline(&mut self, array: &mut Vec<Inline>) {
-        todo!();
-        // Possible fn to pull a inline for easier lexing??
     }
 
     fn block(&mut self, arr: ()) {
