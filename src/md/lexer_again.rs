@@ -1,5 +1,4 @@
 use core::str;
-use std::str::Matches;
 
 pub struct Lexer {
     chars: Box<[u8]>,
@@ -14,6 +13,7 @@ const LINE: u8 = b'-';
 // const SPACE: u8 = b' ';
 const BACKTICK: u8 = b'`';
 
+#[derive(Debug)]
 enum Delim {
     Asterisk,
     Underscore,
@@ -27,11 +27,13 @@ enum Delim {
     ExBraceRight,
 }
 
+#[derive(Debug)]
 struct DelimQuery {
     delim: Delim,
     amnt: usize,
     start: usize,
     end: usize,
+    str: String,
 }
 
 macro_rules! dbg_char {
@@ -211,9 +213,7 @@ impl Lexer {
             }
 
             Some(val) => {
-                // dbg_char!(val);
                 if f(val) {
-                    // dbg_char!(val);
                     return true;
                 } else {
                     self.cur -= 1;
@@ -225,200 +225,105 @@ impl Lexer {
 
     /// Checks if the sequence might be a style break
     fn is_style_break(&mut self) -> bool {
-        let initial_pos = self.cur;
+        let initial = self.cur;
+        let verify = |x| (x == ASTERISK) | (x == UNDERSCORE) | (x == LINE);
 
-        // function to verify if the character can form a style break.
-        let verify = |char| match char {
-            ASTERISK => true,
-            UNDERSCORE => true,
-            LINE => true,
+        let maybe_style_break = self.is_next_pred(verify) && self.is_next_pred(verify);
 
-            _ => false,
-        };
-
-        let first = self.is_next_pred(verify);
-        if !first {
+        if !maybe_style_break {
+            self.cur = initial;
             return false;
         }
 
-        let second = self.is_next_pred(verify);
-        if !second {
-            self.set_position(self.cur - 1);
-            return false;
-        };
-
-        let third = self.is_next_pred(verify);
-        if !third {
-            self.set_position(self.cur - 2);
-            return false;
-        };
-
-        let mut is_style_break = true;
+        let initial_pos = self.cur;
 
         while let Some(char) = self.next() {
             match char {
                 ASTERISK | UNDERSCORE | LINE => {}
 
                 NEWLINE => {
+                    self.go_back_by(1);
                     break;
                 }
 
                 _ => {
                     self.set_position(initial_pos);
-                    is_style_break = false;
-                    break;
+                    return false;
                 }
             }
         }
 
-        self.cur -= 3;
-
-        is_style_break
+        true
     }
 
-    /// Parses a code block
-    /// like:
-    ///
-    /// ```
-    /// panic!();
-    /// ```
-    fn parse_code_block(&mut self, blk_type: CodeBlockType) {
-        use CodeBlockType::*;
-
-        match blk_type {
-            SingleLine => {
-                // the main loop in `lex` does not advance this
-                self.advance_by(4);
-
-                let inside = self.till_or(NEWLINE);
-
-                let block = CodeBlock {
-                    lang: None,
-                    data: None,
-                    style: blk_type,
-                    contents: inside.to_owned(),
-                };
-
-                self.root.push(Token::Code(block))
-            }
-
-            Multiline => {
-                // todo parse this shit
-                todo!()
-            }
-        }
+    fn is_style_break_peek(&mut self) -> bool {
+        self.advance_by(1);
+        self.is_style_break()
     }
 
-    fn bold_or_italic_z(&mut self, target: u8, array: &mut Vec<Inline>) {
-        debug_assert!(
-            target == ASTERISK || target == UNDERSCORE,
-            "invalid character provided to `bold_or_italic`"
-        );
-
-        self.go_back_by(1);
-
-        let mut delim_vec: Vec<DelimQuery> = Vec::new();
-
-        while let Some(ch) = self.next() {
-            match ch {
-                ASTERISK => {
-                    let start = self.cur - 1;
-                    let amnt = self.till_not(ASTERISK);
-
-                    let query = DelimQuery {
-                        delim: Delim::Asterisk,
-                        amnt: amnt + 1,
-                        start,
-                        end: self.cur,
-                    };
-
-                    delim_vec.push(query);
-                }
-
-                _ => todo!(),
-            }
-        }
-
-        // somehow do it okay
-
-        let initial_pos = self.cur;
-
-        if self.is_next_target(target) {};
-    }
-
-    /// Parses italics and bolds if it can
     fn bold_or_italic(&mut self, target: u8, array: &mut Vec<Inline>) {
         debug_assert!(
             target == ASTERISK || target == UNDERSCORE,
             "invalid character provided to `bold_or_italic`"
         );
 
-        // we know we have atleast 1 target char consumed
-        let initial = self.cur;
-        let double = self.is_next_target(target);
+        self.go_back_by(1);
+        dbg_char!(self);
+        let mut delim_vec: Vec<DelimQuery> = Vec::new();
 
-        // we can assume that the intended thing here
-        // are doubled characters like: `**`
-        let mut node = if double {
-            let style = match target {
-                ASTERISK => InlineType::Bold,
-                UNDERSCORE => InlineType::Underline,
-
-                _ => unreachable!(),
-            };
-
-            Inline::new(style)
-        } else {
-            Inline::new(InlineType::Italic)
-        };
-
-        let mut double_end = false;
-        let start_pos = self.cur;
-        let mut count = 0;
-
-        if double {
-            while let Some(val) = self.next() {
-                let peeked_next_val = self.peek().map_or(false, |v| v == target);
-                if val == target && peeked_next_val {
-                    self.advance_by(1);
-
-                    let is_different = self.peek().map_or(false, |v| v != target);
-
-                    if is_different {
-                        self.cur -= 1;
-                        double_end = true;
-                        break;
-                    }
-
-                    self.cur -= 1;
+        while let Some(ch) = self.next() {
+            // check for style break;
+            if (ch == ASTERISK) | (ch == UNDERSCORE) | (ch == LINE) {
+                let initial = self.cur;
+                if self.is_style_break() {
+                    self.cur = initial - 1;
+                    break;
                 }
-
-                count += 1;
             }
 
-            let text = str::from_utf8(self.chars.get(start_pos..start_pos + count).unwrap())
-                .unwrap()
-                .to_string();
+            match ch {
+                ASTERISK => {
+                    let start = self.cur - 1;
+                    let amnt = self.till_not(ASTERISK);
+                    let text = unsafe {
+                        str::from_utf8_unchecked(self.chars.get(start..self.cur).unwrap())
+                    };
 
-            let inline_text = Inline::new(InlineType::Text(text));
+                    let query = DelimQuery {
+                        delim: Delim::Asterisk,
+                        amnt: amnt + 1,
+                        start,
+                        end: self.cur,
+                        str: String::from(text),
+                    };
 
-            node.set_inner(inline_text);
-        } else {
-            let text = self.till_or(target).to_owned();
+                    delim_vec.push(query);
+                }
 
-            node.set_inner(Inline::new(InlineType::Text(text)));
-            self.advance_by(1);
-        };
+                UNDERSCORE => {
+                    let start = self.cur - 1;
+                    let amnt = self.till_not(ASTERISK);
 
-        if !double_end {
-            node.set_style(InlineType::Italic);
-        };
+                    let text = unsafe {
+                        str::from_utf8_unchecked(self.chars.get(start..self.cur).unwrap())
+                    };
 
-        // let bold_italic_debug_char = self.peek().unwrap();
-        // dbg!(&node.inner);
-        // dbg_char!(bold_italic_debug_char);
+                    let query = DelimQuery {
+                        delim: Delim::Underscore,
+                        amnt: amnt + 1,
+                        start,
+                        end: self.cur,
+                        str: String::from(text),
+                    };
 
-        array.push(node)
+                    delim_vec.push(query);
+                }
+
+                _ => {}
+            }
+        }
+
+        dbg!(delim_vec);
     }
 
     /// Parses regular text
@@ -488,7 +393,7 @@ impl Lexer {
 
     fn inline(&mut self, inlines: &mut Vec<Inline>) {
         while let Some(char) = self.next() {
-            dbg!(str::from_utf8(&[char]));
+            // dbg!(str::from_utf8(&[char]));
             match char {
                 ASTERISK => {
                     self.bold_or_italic(ASTERISK, inlines);
@@ -521,23 +426,16 @@ impl Lexer {
         todo!()
     }
 
-    /// Parses a paragraph
     fn paragraph(&mut self) -> Token {
         let mut inlines = Vec::new();
 
         while let Some(char) = self.next() {
-            dbg!(str::from_utf8(&[char]));
             match char {
                 ASTERISK => {
-                    // self.cur -= 1;
-                    let is_style_break = self.is_next_pred(|x| x == ASTERISK)
-                        && self.is_next_pred(|x| x == ASTERISK);
-
-                    // dbg_char!(self);
-
-                    if is_style_break {
-                        self.cur -= 3;
+                    let initial = self.cur;
+                    if self.is_style_break() {
                         dbg_char!(self);
+                        self.cur = initial - 1;
                         break;
                     } else {
                         self.bold_or_italic(ASTERISK, &mut inlines);
@@ -553,13 +451,7 @@ impl Lexer {
                 }
 
                 NEWLINE => {
-                    let double_newline = self.is_next_target(NEWLINE);
-
-                    dbg_char!(self);
-
-                    // a double newline
-                    // means the end of a paragraph
-                    if double_newline {
+                    if self.is_next_target(NEWLINE) {
                         self.advance_by(1);
                         break;
                     }
@@ -572,14 +464,8 @@ impl Lexer {
         Token::Paragraph(inlines)
     }
 
-    fn block(&mut self, arr: ()) {
-        todo!();
-        // Possible fn to make block elements
-    }
-
-    /// Pull one token
     fn lex(&mut self) -> Token {
-        let char = match self.peek() {
+        let char = match self.next() {
             Some(val) => val,
             None => return Token::Eof,
         };
@@ -589,30 +475,14 @@ impl Lexer {
                 // Checks for a style break
                 // or bold or italics.
                 if dbg!(self.is_style_break()) {
-                    self.advance_by(3);
                     Token::StyleBreak
                 } else {
+                    self.cur -= 1;
                     self.paragraph()
                 }
             }
 
             BACKTICK => {
-                // we are at 1 detected backtick
-                let initial = self.cur;
-
-                self.till(BACKTICK);
-
-                // our cursor is at the first character after the backtick
-                // therefore initial - cur is the amount of backticks
-                let amnt_of_backticks = self.cur - initial;
-
-                // less than 3 means a inline element
-                if amnt_of_backticks < 3 {
-                    // let para = self.till(BACKTICK);
-                } else {
-                    // this should be a fenced code block!
-                }
-
                 todo!();
             }
 
