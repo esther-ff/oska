@@ -5,3 +5,6 @@ pub const GREATER_THAN: u8 = b'>';
 pub const BACKTICK: u8 = b'`';
 pub const HASH: u8 = b'#';
 pub const EQUALS: u8 = b'=';
+pub const SPACE: u8 = b' ';
+pub const NEWLINE: u8 = b'\n';
+pub const TAB: u8 = b'\t';

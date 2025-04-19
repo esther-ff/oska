@@ -5,20 +5,74 @@ pub(crate) struct Walker<'w> {
     last: Option<u8>,
 }
 
+#[derive(Debug)]
+pub(crate) struct StrRange {
+    start: usize,
+    end: usize,
+}
+
+impl StrRange {
+    pub fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+
+    pub fn get(&self) -> (usize, usize) {
+        (self.start, self.end)
+    }
+
+    pub fn resolve<'a>(self, data: &'a [u8]) -> &'a str {
+        let bytes = data
+            .get(self.start..self.end)
+            .expect("out of bounds access");
+
+        // Safety:
+        //
+        // The slice and it's bounds point to a valid subslice
+        // of utf-8 characters.
+        unsafe { core::str::from_utf8_unchecked(bytes) }
+    }
+
+    pub fn adjust<F>(&mut self, func: F)
+    where
+        F: FnOnce((&mut usize, &mut usize)),
+    {
+        func((&mut self.start, &mut self.end))
+    }
+}
+
 impl<'w> Walker<'w> {
     /// Creates a new `Walker`
     /// Verifies if the bytes provided
     /// form a UTF-8 string.
-    pub(crate) fn new(data: &'w [u8]) -> Self {
-        #[cfg(debug_assertions)]
-        let _ = core::str::from_utf8(data).expect("used non-utf8 text");
+    pub(crate) fn new<T: Into<&'w [u8]>>(data: T) -> Self {
+        // #[cfg(debug_assertions)]
+        // let _ = core::str::from_utf8(data).expect("used non-utf8 text");
 
+        let actual = data.into();
         Self {
             last: None,
             position: 0,
-            len: data.len(),
-            data,
+            len: actual.len(),
+            data: actual,
         }
+    }
+
+    pub(crate) unsafe fn _get_rest_test(&mut self) {
+        let text = self.data.get(self.position()..self.len - 1).unwrap();
+
+        println!("{}", core::str::from_utf8(text).unwrap());
+    }
+
+    pub(crate) fn get(&self, start: usize, end: usize) -> Option<StrRange> {
+        match self.data.get(start..end) {
+            None => return None,
+
+            Some(_) => return Some(StrRange::new(start, end)),
+        }
+    }
+
+    pub(crate) fn data(&self) -> &[u8] {
+        &self.data
     }
 
     /// Goes one character forward.
@@ -50,13 +104,7 @@ impl<'w> Walker<'w> {
     /// Note: `peek`ing 0 characters, will give the character
     /// at the current position
     pub(crate) fn peek(&self, chars: usize) -> Option<u8> {
-        if (self.position + chars > self.len) | (chars > self.len) {
-            return None;
-        }
-
-        let val = self.data[self.position + chars];
-
-        Some(val)
+        self.data.get(self.position() + chars).copied()
     }
 
     /// Returns the position
@@ -104,7 +152,7 @@ impl<'w> Walker<'w> {
     ///
     /// assert!(w.till(b'!') == Some("Haha"));
     /// ```
-    pub(crate) fn till(&mut self, target: u8) -> Option<&str> {
+    pub(crate) fn till(&mut self, target: u8) -> Option<StrRange> {
         let start = self.position();
         let mut found = false;
 
@@ -121,9 +169,9 @@ impl<'w> Walker<'w> {
         }
 
         if found {
-            let bytes = &self.data[start..self.position()];
+            let bytes = StrRange::new(start, self.position());
 
-            Some(core::str::from_utf8(bytes).expect("invalid utf-8"))
+            Some(bytes)
         } else {
             None
         }
@@ -140,7 +188,7 @@ impl<'w> Walker<'w> {
     /// assert!(w.till_not(b'*') == 3);
     /// assert!(w.next().unwrap() == b'A');
     /// ```
-    fn till_not(&mut self, target: u8) -> usize {
+    pub(crate) fn till_not(&mut self, target: u8) -> usize {
         let mut count = 0;
 
         while let Some(val) = self.next() {
@@ -213,7 +261,6 @@ mod tests {
         let mut w = Walker::new(text.as_bytes());
 
         assert!(w.next().unwrap() == b'A');
-        dbg!((w.peek(0), b'B'));
         assert!(w.is_next_pred(|char| char == b'B'));
     }
 
@@ -232,7 +279,9 @@ mod tests {
 
         let mut w = Walker::new(text.as_bytes());
 
-        assert!(w.till(b'!') == Some("i like cake"));
+        let string = w.till(b'!').unwrap().resolve(text.as_bytes());
+
+        assert!(string == "i like cake");
     }
 
     #[test]
