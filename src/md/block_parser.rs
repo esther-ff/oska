@@ -5,6 +5,8 @@ use crate::walker::{StrRange, Walker};
 use core::num::NonZero;
 use core::str;
 
+use super::chars::TILDE;
+
 static BLOCK_VEC_PREALLOCATION: usize = 64;
 
 #[derive(Debug)]
@@ -43,12 +45,12 @@ pub(crate) struct Code {
 #[derive(Debug)]
 pub(crate) struct CodeMeta {
     lang: Lang,
-    info: String,
-    id: usize,
+    info: Option<String>,
 }
 
 #[derive(Debug)]
 enum Lang {
+    None,
     Rust,
     NotSupported(String),
 }
@@ -136,6 +138,10 @@ impl BlockParser {
             // Blockquote
             GREATER_THAN => self.blockquote(walker),
 
+            BACKTICK => self.code::<BACKTICK>(walker),
+
+            TILDE => self.code::<TILDE>(walker),
+
             _ => self.paragraph(walker),
         };
 
@@ -171,7 +177,7 @@ impl BlockParser {
     pub fn blockquote(&mut self, walker: &mut Walker<'_>) -> Block {
         let id = self.get_new_id();
         let level = walker.till_not(GREATER_THAN);
-        let initial = walker.position() + walker.is_next_char(SPACE) as usize;
+        let initial = walker.position();
 
         while let Some(char) = walker.next() {
             match char {
@@ -226,8 +232,66 @@ impl BlockParser {
         Block::Blockquote(blk)
     }
 
-    pub fn code(&mut self) -> Block {
-        todo!()
+    pub fn code<const CHAR: u8>(&mut self, walker: &mut Walker<'_>) -> Block {
+        debug_assert!(
+            CHAR == TILDE || CHAR == BACKTICK,
+            "invalid char provided to the `code` function"
+        );
+
+        let amnt_of_backticks = walker.till_not(CHAR);
+
+        if amnt_of_backticks < 2 {
+            walker.retreat(amnt_of_backticks + 1);
+            return self.paragraph(walker);
+        }
+
+        let pos = walker.position();
+        let mut lang = Lang::None;
+        let mut info = None;
+
+        while let Some(char) = walker.next() {
+            if char == CHAR {
+                walker.set_position(pos);
+                return self.paragraph(walker);
+            };
+
+            if char == NEWLINE {
+                let range = StrRange::new(pos, walker.position() - 1);
+
+                let mut split = range.resolve(walker.data()).split(",");
+
+                lang = Lang::NotSupported(split.next().expect("always present").to_owned());
+
+                info = split.next().map(|x| x.to_owned());
+
+                break;
+            }
+        }
+
+        let code_start = walker.position();
+        let mut code_end = walker.position();
+        while let Some(char) = walker.next() {
+            if walker.is_next_char(CHAR) {
+                let amnt_of = walker.till_not(CHAR);
+
+                if amnt_of >= amnt_of_backticks {
+                    code_end = walker.position() - amnt_of;
+                    break;
+                }
+            }
+        }
+
+        let text = Some(StrRange::new(code_start, code_end));
+
+        let meta = CodeMeta { lang, info };
+
+        let code = Code {
+            meta,
+            text,
+            id: self.get_new_id(),
+        };
+
+        Block::FencedCode(code)
     }
 
     pub fn list(&mut self) -> Block {
@@ -242,7 +306,7 @@ impl BlockParser {
 #[cfg(test)]
 mod tests {
 
-    use crate::walker::Walker;
+    use crate::{block_parser::Block, walker::Walker};
 
     use super::BlockParser;
 
@@ -250,15 +314,84 @@ mod tests {
     fn blockquote() {
         let md = concat!(
             ">>> This is a blockquote\n",
-            ">>>> This is another blockquote\n",
-        );
+            ">>>> This is an another blockquote\n",
+        )
+        .as_bytes();
 
         let mut parser = BlockParser::new(());
-        let mut walker = Walker::new(md.as_bytes());
+        let mut walker = Walker::new(md);
 
-        let val = parser.block(&mut walker).unwrap();
-        dbg!(val);
-        let val = parser.block(&mut walker);
-        dbg!(val);
+        let val = parser
+            .block(&mut walker)
+            .expect("this block should be here");
+
+        let inner = match val {
+            Block::Blockquote(q) => *q.text.expect("field not present"),
+            _ => panic!("block was not blockquote"),
+        };
+
+        match inner {
+            Block::Paragraph(para) => {
+                let text = para.text.unwrap();
+
+                let resolved = text.resolve(md);
+
+                assert!(resolved == "This is a blockquote\n");
+            }
+
+            _ => assert!(false, "block was not paragraph"),
+        }
+
+        let val = parser
+            .block(&mut walker)
+            .expect("this block should be here");
+
+        let inner = match val {
+            Block::Blockquote(q) => *q.text.expect("field not present"),
+            _ => panic!("block was not blockquote"),
+        };
+
+        match inner {
+            Block::Paragraph(para) => {
+                let text = para.text.unwrap();
+
+                let resolved = text.resolve(md);
+
+                assert!(resolved == "This is an another blockquote\n");
+            }
+
+            _ => assert!(false, "block was not paragraph"),
+        }
+    }
+
+    #[test]
+    fn code() {
+        let data = concat!("```rust\n", "#[no_std]\n", "```").as_bytes();
+
+        let mut walker = Walker::new(data);
+        let mut parser = BlockParser::new(());
+
+        let block = match parser.block(&mut walker).expect("expected block") {
+            Block::FencedCode(fc) => fc,
+
+            _ => panic!("block was not fenced code"),
+        };
+
+        assert!(block.text.expect("text should be here").resolve(data) == "#[no_std]\n");
+    }
+
+    fn code_tilde() {
+        let data = concat!("~~~rust\n", "#[no_std]\n", "~~~").as_bytes();
+
+        let mut walker = Walker::new(data);
+        let mut parser = BlockParser::new(());
+
+        let block = match parser.block(&mut walker).expect("expected block") {
+            Block::FencedCode(fc) => fc,
+
+            _ => panic!("block was not fenced code"),
+        };
+
+        assert!(block.text.expect("text should be here").resolve(data) == "#[no_std]\n");
     }
 }

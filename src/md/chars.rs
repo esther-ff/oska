@@ -8,3 +8,4 @@ pub const EQUALS: u8 = b'=';
 pub const SPACE: u8 = b' ';
 pub const NEWLINE: u8 = b'\n';
 pub const TAB: u8 = b'\t';
+pub const TILDE: u8 = b'~';
