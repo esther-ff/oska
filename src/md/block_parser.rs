@@ -230,7 +230,7 @@ pub(crate) struct BlockParser {
 }
 
 impl BlockParser {
-    pub fn new(_data: ()) -> Self {
+    pub fn new() -> Self {
         Self {
             col: Vec::with_capacity(64),
             id: 0,
@@ -249,7 +249,6 @@ impl BlockParser {
         let char = match walker.next() {
             Some(c) => c,
             None => {
-                println!("NO MERE!");
                 return Block::Eof;
             }
         };
@@ -297,8 +296,6 @@ impl BlockParser {
     pub fn paragraph(&mut self, walker: &mut Walker<'_>) -> Block {
         let initial = walker.position();
 
-        dbg!(walker.data().get(initial));
-
         while let Some(char) = walker.next() {
             match char {
                 ch if (ch == NEWLINE) && walker.is_next_char(NEWLINE) => break,
@@ -320,20 +317,11 @@ impl BlockParser {
                     }
                 }
 
-                GREATER_THAN => {
-                    // walker.retreat(1);
-                    // break;
-                    //
-                    // *walker.data().get_mut(walker.position()).unwrap() = SPACE
-                }
                 _ => {}
             };
         }
 
-        Block::make_paragraph(
-            StrRange::new(initial - 1, walker.position()),
-            self.get_new_id(),
-        )
+        Block::make_paragraph(StrRange::new(initial, walker.position()), self.get_new_id())
     }
 
     pub fn blockquote(&mut self, walker: &mut Walker<'_>) -> Block {
@@ -341,10 +329,9 @@ impl BlockParser {
         let level = walker.till_not(GREATER_THAN);
         let initial = walker.position();
 
-        dbg!(walker.position());
+        let tmp = usize::from(walker.is_next_char(SPACE));
 
         while let Some(char) = walker.next() {
-            dbg!(walker.position());
             match char {
                 NEWLINE => {
                     if walker.is_next_char(NEWLINE) {
@@ -408,7 +395,7 @@ impl BlockParser {
 
         let piece = walker
             .data()
-            .get(initial + 1..walker.position())
+            .get(initial..walker.position())
             .expect("this access should be in bounds");
 
         let mut new_walker = Walker::new(piece);
@@ -418,8 +405,8 @@ impl BlockParser {
             mut val => {
                 val.str_range(|range| {
                     range.adjust(|(start, end)| {
-                        *start += initial;
-                        *end += initial;
+                        *start += initial + tmp;
+                        *end += initial - tmp;
                     })
                 });
 
@@ -427,7 +414,6 @@ impl BlockParser {
             }
         };
 
-        dbg!(walker.position());
         Block::make_blockquote(inner, id, level)
     }
 
@@ -469,7 +455,7 @@ impl BlockParser {
 
         let code_start = walker.position();
         let mut code_end = walker.position();
-        while let Some(char) = walker.next() {
+        while let Some(_char) = walker.next() {
             if walker.is_next_char(CHAR) {
                 let amnt_of = walker.till_not(CHAR);
 
@@ -541,11 +527,7 @@ impl BlockParser {
 
         if !walker.is_next_char(SPACE) {
             walker.retreat(level as usize);
-            // dbg!(level);
-            // dbg!(walker.data().get(42));
-            //
             let para = self.paragraph(walker);
-            dbg!(&para);
             return para.into();
         } else {
             walker.advance(1);
@@ -647,38 +629,42 @@ mod tests {
             "and let's have a nice paragraph\n",
         )
         .as_bytes();
-        dbg!(data.len());
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new(());
+        let mut parser = BlockParser::new();
+
+        match parser.block(&mut walker) {
+            Block::Blockquote(bq) => {
+                match *bq.text.expect("no inner element") {
+                    Block::Paragraph(para) => {
+                        let text = para.text.expect("text was not present");
+                        assert!("Blockquote\n>BlockquoteNoSpace" == dbg!(text.resolve(data)));
+                    }
+
+                    _ => panic!("inner block was not a paragraph"),
+                };
+            }
+
+            _ => panic!("block was not a blockquote"),
+        };
+
+        match parser.block(&mut walker) {
+            Block::Heading(h) => {
+                let text = h.text.expect("no text present in heading");
+
+                assert!(text.resolve(data) == "Heading");
+                assert!(u8::from(h.level.0) == 1);
+            }
+
+            _ => panic!("block was not a blockquote"),
+        };
 
         let block = dbg!(parser.block(&mut walker));
-        dbg!(walker.position());
-        dbg!(block.test(data));
-
         let block = dbg!(parser.block(&mut walker));
-        dbg!(walker.position());
-        dbg!(block.test(data));
         let block = dbg!(parser.block(&mut walker));
-        dbg!(walker.position());
-        dbg!(block.test(data));
         let block = dbg!(parser.block(&mut walker));
-        dbg!(walker.position());
-        dbg!(block.test(data));
         let block = dbg!(parser.block(&mut walker));
-        dbg!(walker.position());
-        dbg!(block.test(data));
-
         let block = dbg!(parser.block(&mut walker));
-        dbg!(walker.position());
-        dbg!(block.test(data));
-        let block = dbg!(parser.block(&mut walker));
-        dbg!(walker.position());
-        dbg!(block.test(data));
-
-        let block = dbg!(parser.block(&mut walker));
-        dbg!(walker.position());
-        dbg!(block.test(data));
     }
 
     #[test]
@@ -689,7 +675,7 @@ mod tests {
         )
         .as_bytes();
 
-        let mut parser = BlockParser::new(());
+        let mut parser = BlockParser::new();
         let mut walker = Walker::new(md);
 
         let val = parser.block(&mut walker);
@@ -705,7 +691,7 @@ mod tests {
 
                 let resolved = text.resolve(md);
 
-                assert!(resolved == "This is a blockquote\n");
+                assert!(dbg!(resolved) == "This is a blockquote\n");
             }
 
             _ => assert!(false, "block was not paragraph"),
@@ -736,7 +722,7 @@ mod tests {
         let data = concat!("```rust\n", "#[no_std]\n", "```").as_bytes();
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new(());
+        let mut parser = BlockParser::new();
 
         let block = match parser.block(&mut walker) {
             Block::FencedCode(fc) => fc,
@@ -752,7 +738,7 @@ mod tests {
         let data = concat!("~~~rust\n", "#[no_std]\n", "~~~").as_bytes();
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new(());
+        let mut parser = BlockParser::new();
 
         let block = match parser.block(&mut walker) {
             Block::FencedCode(fc) => fc,
@@ -774,7 +760,7 @@ mod tests {
         );
 
         let mut walker = Walker::new(data.as_bytes());
-        let mut parser = BlockParser::new(());
+        let mut parser = BlockParser::new();
 
         let block = parser.block(&mut walker);
 
@@ -800,7 +786,7 @@ mod tests {
         let data = "###### une, grande, et indivisible".as_bytes();
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new(());
+        let mut parser = BlockParser::new();
 
         let block = match parser.block(&mut walker) {
             Block::Heading(h) => h,
@@ -825,7 +811,7 @@ mod tests {
         let data = concat!("Heading text\n", "======",).as_bytes();
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new(());
+        let mut parser = BlockParser::new();
 
         let block = match parser.block(&mut walker) {
             Block::Heading(h) => h,
@@ -850,7 +836,7 @@ mod tests {
         let data = concat!("___\n", "---\n", "***\n").as_bytes();
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new(());
+        let mut parser = BlockParser::new();
 
         match parser.block(&mut walker) {
             Block::StyleBreak(_) => {}
