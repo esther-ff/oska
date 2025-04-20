@@ -177,6 +177,33 @@ impl<'w> Walker<'w> {
         }
     }
 
+    /// Goes forward till it hits a character
+    /// doesn't care if it doesn't find the actual target
+    /// as in:
+    /// ```rust,ignore
+    /// use oska::walker::Walker;
+    ///
+    /// let text = "Haha!";
+    /// let mut w = Walker::new(text.as_bytes());
+    ///
+    /// assert!(w.till(b'!') == Some("Haha"));
+    /// ```
+    pub(crate) fn till_inclusive(&mut self, target: u8) -> StrRange {
+        let start = self.position();
+
+        while let Some(char) = self.next() {
+            if char == target {
+                break;
+            }
+
+            if self.is_next_char(target) {
+                break;
+            }
+        }
+
+        StrRange::new(start, self.position())
+    }
+
     /// Goes forward till it stops finding a character
     /// as in:
     /// ```rust,ignore

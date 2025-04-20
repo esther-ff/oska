@@ -169,6 +169,27 @@ impl BlockParser {
             match char {
                 ch if (ch == NEWLINE) && walker.is_next_char(NEWLINE) => break,
 
+                NEWLINE if walker.is_next_char(EQUALS) => {
+                    let mut heading = true;
+                    let pos = walker.position();
+                    while let Some(char) = walker.next() {
+                        match char {
+                            NEWLINE => break,
+
+                            EQUALS => {}
+
+                            _ => {
+                                heading = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if heading {
+                        return Self::special_heading(initial - 1, pos - 1);
+                    }
+                }
+
                 GREATER_THAN => {
                     walker.retreat(1);
                     break;
@@ -329,11 +350,20 @@ impl BlockParser {
             walker.advance(1);
         }
 
-        let text = walker.till(NEWLINE);
+        let text = Some(walker.till_inclusive(NEWLINE));
 
         let heading = Heading {
             level: HeadingLevel::new(level),
             text,
+        };
+
+        Block::Heading(heading)
+    }
+
+    pub fn special_heading(start: usize, end: usize) -> Block {
+        let heading = Heading {
+            level: HeadingLevel::new(1),
+            text: Some(StrRange::new(start, end)),
         };
 
         Block::Heading(heading)
@@ -491,6 +521,36 @@ mod tests {
             u8::from(block.level.0) == 6,
             "invalid level found, was supposed to be 6, is {}",
             block.level.0
+        );
+
+        assert!(
+            block.text.expect("should be here").resolve(data) == "une, grande, et indivisible",
+            "invalid text in heading"
+        );
+    }
+
+    #[test]
+    fn heading_under() {
+        let data = concat!("Heading text\n", "======",).as_bytes();
+
+        let mut walker = Walker::new(data);
+        let mut parser = BlockParser::new(());
+
+        let block = match parser.block(&mut walker).expect("expected block") {
+            Block::Heading(h) => h,
+
+            _ => panic!("block was not a heading"),
+        };
+
+        assert!(
+            u8::from(block.level.0) == 1,
+            "invalid level found, was supposed to be 1, is {}",
+            block.level.0
+        );
+
+        assert!(
+            block.text.expect("should be here").resolve(data) == "Heading text",
+            "invalid text in heading"
         );
     }
 
