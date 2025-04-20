@@ -1,11 +1,9 @@
 use crate::md::chars::{
-    ASTERISK, BACKTICK, EQUALS, GREATER_THAN, HASH, LINE, NEWLINE, SPACE, UNDERSCORE,
+    ASTERISK, BACKTICK, EQUALS, GREATER_THAN, HASH, LINE, NEWLINE, SPACE, TILDE, UNDERSCORE,
 };
 use crate::walker::{StrRange, Walker};
 use core::num::NonZero;
 use core::str;
-
-use super::chars::TILDE;
 
 static BLOCK_VEC_PREALLOCATION: usize = 64;
 
@@ -105,6 +103,62 @@ impl Block {
             Self::StyleBreak(_) => {}
         }
     }
+
+    #[inline]
+    pub fn make_paragraph(range: impl Into<Option<StrRange>>, id: usize) -> Block {
+        Block::Paragraph(Paragraph {
+            text: range.into(),
+            id,
+        })
+    }
+
+    #[inline]
+    pub fn make_blockquote(range: impl Into<Option<Block>>, id: usize, level: usize) -> Block {
+        Block::Blockquote(BlkQt {
+            level: BlkQtLevel::new(level),
+            text: range.into().map(|x| Box::new(x)),
+            id,
+        })
+    }
+
+    #[inline]
+    pub fn make_list() -> Block {
+        todo!()
+    }
+
+    #[inline]
+    pub fn make_code<T: Into<Option<StrRange>>, A: Into<Option<String>>>(
+        range: T,
+        range_meta: A,
+        lang: Lang,
+        id: usize,
+    ) -> Block {
+        let meta = CodeMeta {
+            lang,
+            info: range_meta.into(),
+        };
+
+        Block::FencedCode(Code {
+            meta,
+            text: range.into(),
+            id,
+        })
+    }
+
+    #[inline]
+    pub fn make_heading(range: impl Into<Option<StrRange>>, level: u8) -> Block {
+        let heading_level = HeadingLevel::new(level);
+
+        Block::Heading(Heading {
+            level: heading_level,
+            text: range.into(),
+        })
+    }
+
+    #[inline]
+    pub fn make_style_break(id: usize) -> Block {
+        Block::StyleBreak(Break { id })
+    }
 }
 
 pub(crate) struct BlockParser {
@@ -199,14 +253,7 @@ impl BlockParser {
             };
         }
 
-        let range = StrRange::new(initial, walker.position());
-
-        let para = Paragraph {
-            text: Some(range),
-            id: self.get_new_id(),
-        };
-
-        Block::Paragraph(para)
+        Block::make_paragraph(StrRange::new(initial, walker.position()), self.get_new_id())
     }
 
     pub fn blockquote(&mut self, walker: &mut Walker<'_>) -> Block {
@@ -236,13 +283,12 @@ impl BlockParser {
             }
         }
 
-        let bytes = walker
-            .get(initial, walker.position())
-            .expect("this access should be in range");
+        let piece = walker
+            .data()
+            .get(initial..walker.position())
+            .expect("this access should be in bounds");
 
-        let (start, end) = bytes.get();
-
-        let mut new_walker = Walker::new(&walker.data()[start..end]);
+        let mut new_walker = Walker::new(piece);
         let inner = match self.block(&mut new_walker) {
             None => None,
 
@@ -254,17 +300,11 @@ impl BlockParser {
                     })
                 });
 
-                Some(Box::new(val))
+                Some(val)
             }
         };
 
-        let blk = BlkQt {
-            level: BlkQtLevel(level),
-            text: inner,
-            id,
-        };
-
-        Block::Blockquote(blk)
+        Block::make_blockquote(inner, id, level)
     }
 
     pub fn code<const CHAR: u8>(&mut self, walker: &mut Walker<'_>) -> Block {
@@ -316,17 +356,12 @@ impl BlockParser {
             }
         }
 
-        let text = Some(StrRange::new(code_start, code_end));
-
-        let meta = CodeMeta { lang, info };
-
-        let code = Code {
-            meta,
-            text,
-            id: self.get_new_id(),
-        };
-
-        Block::FencedCode(code)
+        Block::make_code(
+            StrRange::new(code_start, code_end),
+            info,
+            lang,
+            self.get_new_id(),
+        )
     }
 
     pub fn heading(&mut self, walker: &mut Walker<'_>) -> Block {
@@ -350,23 +385,11 @@ impl BlockParser {
             walker.advance(1);
         }
 
-        let text = Some(walker.till_inclusive(NEWLINE));
-
-        let heading = Heading {
-            level: HeadingLevel::new(level),
-            text,
-        };
-
-        Block::Heading(heading)
+        Block::make_heading(walker.till_inclusive(NEWLINE), level)
     }
 
     pub fn special_heading(start: usize, end: usize) -> Block {
-        let heading = Heading {
-            level: HeadingLevel::new(1),
-            text: Some(StrRange::new(start, end)),
-        };
-
-        Block::Heading(heading)
+        Block::make_heading(StrRange::new(start, end), 1)
     }
 
     pub fn style_break(&mut self, walker: &mut Walker<'_>) -> Option<Block> {
@@ -400,11 +423,7 @@ impl BlockParser {
             }
         }
 
-        let brk = Block::StyleBreak(Break {
-            id: self.get_new_id(),
-        });
-
-        Some(brk)
+        Block::make_style_break(self.get_new_id()).into()
     }
 
     pub fn list(&mut self) -> Block {

@@ -1,3 +1,5 @@
+use core::convert::From;
+
 pub(crate) struct Walker<'w> {
     data: &'w [u8],
     len: usize,
