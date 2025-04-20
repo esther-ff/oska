@@ -8,20 +8,20 @@ use core::str;
 static BLOCK_VEC_PREALLOCATION: usize = 64;
 
 #[derive(Debug)]
-pub(crate) struct Paragraph {
+pub struct Paragraph {
     text: Option<StrRange>,
     id: usize,
 }
 
 #[derive(Debug)]
-pub(crate) struct BlkQt {
+pub struct BlkQt {
     level: BlkQtLevel,
     text: Option<Box<Block>>,
     id: usize,
 }
 
 #[derive(Debug)]
-pub(crate) struct BlkQtLevel(usize);
+pub struct BlkQtLevel(usize);
 
 impl BlkQtLevel {
     fn new(level: usize) -> Self {
@@ -31,23 +31,23 @@ impl BlkQtLevel {
 
 // TODO: Lists...
 #[derive(Debug)]
-pub(crate) struct List;
+pub struct List;
 
 #[derive(Debug)]
-pub(crate) struct Code {
+pub struct Code {
     meta: CodeMeta,
     text: Option<StrRange>,
     id: usize,
 }
 
 #[derive(Debug)]
-pub(crate) struct IndentCode {
+pub struct IndentCode {
     indents: Box<[StrRange]>,
     id: usize,
 }
 
 #[derive(Debug)]
-pub(crate) struct CodeMeta {
+pub struct CodeMeta {
     lang: Lang,
     info: Option<String>,
 }
@@ -61,11 +61,7 @@ pub enum Lang {
 
 impl Lang {
     pub fn is_useless(&self) -> bool {
-        match self {
-            Self::None => true,
-            Self::NotSupported(_) => true,
-            _ => false,
-        }
+        matches!(self, Self::None | Self::NotSupported(_))
     }
 
     pub fn recognize(name: &str) -> Lang {
@@ -80,17 +76,17 @@ impl Lang {
 }
 
 #[derive(Debug)]
-pub(crate) struct Heading {
+pub struct Heading {
     level: HeadingLevel,
     text: Option<StrRange>,
     id: usize,
 }
 
 #[derive(Debug)]
-pub(crate) struct HeadingLevel(NonZero<u8>);
+pub struct HeadingLevel(NonZero<u8>);
 
 #[derive(Debug)]
-pub(crate) struct Break {
+pub struct Break {
     id: usize,
 }
 
@@ -128,10 +124,10 @@ impl Block {
             }
             Self::List(_) => todo!("str_range: list"),
             Self::FencedCode(code) => func(code.text.as_mut().expect("should be here")),
-            Self::IndentedCode(code) => panic!("calling `str_range` on indented code is pointless"),
+            Self::IndentedCode(_) => {}
             Self::Heading(heading) => func(heading.text.as_mut().expect("should be here")),
-            Self::StyleBreak(_) => panic!("calling `str_range` on a style break is pointless"),
-            Self::Eof => unimplemented!(),
+            Self::StyleBreak(_) => {}
+            Self::Eof => panic!("temporary: panicked due to running `str_range` on a `Block::Eof`"),
         }
     }
 
@@ -147,7 +143,7 @@ impl Block {
     pub fn make_blockquote(range: impl Into<Option<Block>>, id: usize, level: usize) -> Block {
         Block::Blockquote(BlkQt {
             level: BlkQtLevel::new(level),
-            text: range.into().map(|x| Box::new(x)),
+            text: range.into().map(Box::new),
             id,
         })
     }
@@ -262,7 +258,7 @@ impl BlockParser {
             }
         }
 
-        let block = match char {
+        match char {
             // Heading
             HASH => match self.heading(walker) {
                 None => self.paragraph(walker),
@@ -284,13 +280,11 @@ impl BlockParser {
                     self.paragraph(walker)
                 }
 
-                Some(block) => return block,
+                Some(block) => block,
             },
 
             _ => self.paragraph(walker),
-        };
-
-        block
+        }
     }
 
     pub fn paragraph(&mut self, walker: &mut Walker<'_>) -> Block {
@@ -301,9 +295,8 @@ impl BlockParser {
                 ch if (ch == NEWLINE) && walker.is_next_char(NEWLINE) => break,
 
                 NEWLINE if walker.is_next_char(EQUALS) => {
-                    match self.handle_special_heading(walker, initial) {
-                        Some(block) => return block,
-                        None => {}
+                    if let Some(block) = self.handle_special_heading(walker, initial) {
+                        return block;
                     }
                 }
 
@@ -489,13 +482,12 @@ impl BlockParser {
         ranges.push(range);
 
         walker.advance(1);
-        self.indented_code_inner(walker, &mut ranges);
+        Self::indented_code_inner(walker, &mut ranges);
 
         Block::make_indented_code(ranges, self.get_new_id()).into()
     }
 
-    #[inline]
-    fn indented_code_inner(&mut self, walker: &mut Walker<'_>, accum: &mut Vec<StrRange>) {
+    fn indented_code_inner(walker: &mut Walker<'_>, accum: &mut Vec<StrRange>) {
         let amnt_of_spaces = walker.till_not(SPACE);
 
         if amnt_of_spaces < 4 {
@@ -508,7 +500,7 @@ impl BlockParser {
         walker.advance(1);
         accum.push(range);
 
-        self.indented_code_inner(walker, accum)
+        Self::indented_code_inner(walker, accum)
     }
 
     pub fn heading(&mut self, walker: &mut Walker<'_>) -> Option<Block> {

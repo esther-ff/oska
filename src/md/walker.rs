@@ -1,6 +1,4 @@
-use core::convert::From;
-
-pub(crate) struct Walker<'w> {
+pub struct Walker<'w> {
     data: &'w [u8],
     len: usize,
     position: usize,
@@ -8,7 +6,7 @@ pub(crate) struct Walker<'w> {
 }
 
 #[derive(Debug)]
-pub(crate) struct StrRange {
+pub struct StrRange {
     start: usize,
     end: usize,
 }
@@ -22,7 +20,7 @@ impl StrRange {
         (self.start, self.end)
     }
 
-    pub fn resolve<'a>(self, data: &'a [u8]) -> &'a str {
+    pub fn resolve(self, data: &[u8]) -> &str {
         let bytes = data
             .get(self.start..self.end)
             .expect("out of bounds access");
@@ -66,15 +64,15 @@ impl<'w> Walker<'w> {
     }
 
     pub(crate) fn get(&self, start: usize, end: usize) -> Option<StrRange> {
-        match self.data.get(start..end) {
-            None => return None,
-
-            Some(_) => return Some(StrRange::new(start, end)),
+        if start > self.len && end < self.len {
+            return StrRange::new(start, end).into();
         }
+
+        None
     }
 
     pub(crate) fn data(&self) -> &[u8] {
-        &self.data
+        self.data
     }
 
     /// Goes one character forward.
@@ -131,7 +129,7 @@ impl<'w> Walker<'w> {
 
     /// Checks if the next char is equal to `target`
     pub(crate) fn is_next_char(&mut self, target: u8) -> bool {
-        self.peek(0).map_or(false, |char| char == target)
+        self.peek(0) == Some(target)
     }
 
     /// Executes the given closure, using the next character as an argument
@@ -141,7 +139,7 @@ impl<'w> Walker<'w> {
     where
         F: FnOnce(u8) -> bool,
     {
-        self.peek(0).map_or(false, pred)
+        self.peek(0).is_some_and(pred)
     }
 
     /// Goes forward till it hits a character
