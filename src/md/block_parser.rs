@@ -134,12 +134,26 @@ impl BlockParser {
             None => return None,
         };
 
+        let pred = |x: u8| (x == ASTERISK) | (x == LINE) | (x == UNDERSCORE);
+
+        if pred(char) {
+            match self.style_break(walker) {
+                None => {}
+                Some(sb) => return Some(sb),
+            }
+        }
+
         let block = match char {
+            // Heading
+            HASH => self.heading(walker),
+
             // Blockquote
             GREATER_THAN => self.blockquote(walker),
 
+            // Fenced code
             BACKTICK => self.code::<BACKTICK>(walker),
 
+            // Fenced code again!
             TILDE => self.code::<TILDE>(walker),
 
             _ => self.paragraph(walker),
@@ -294,11 +308,76 @@ impl BlockParser {
         Block::FencedCode(code)
     }
 
-    pub fn list(&mut self) -> Block {
-        todo!()
+    pub fn heading(&mut self, walker: &mut Walker<'_>) -> Block {
+        let level = if walker.is_next_char(HASH) {
+            let temp = walker.till_not(HASH);
+
+            if temp > 5 {
+                walker.retreat(temp + 1);
+                return self.paragraph(walker);
+            };
+
+            temp as u8 + 1
+        } else {
+            1
+        };
+
+        if !walker.is_next_char(SPACE) {
+            walker.retreat(level as usize);
+            return self.paragraph(walker);
+        } else {
+            walker.advance(1);
+        }
+
+        let text = walker.till(NEWLINE);
+
+        let heading = Heading {
+            level: HeadingLevel::new(level),
+            text,
+        };
+
+        Block::Heading(heading)
     }
 
-    pub fn style_break(&mut self) -> Block {
+    pub fn style_break(&mut self, walker: &mut Walker<'_>) -> Option<Block> {
+        let initial = walker.position();
+
+        let pred = |x| (x == ASTERISK) | (x == LINE) | (x == UNDERSCORE);
+
+        if walker.is_next_pred(pred) {
+            walker.advance(1);
+
+            if !walker.is_next_pred(pred) {
+                walker.retreat(1);
+                return None;
+            } else {
+                walker.advance(1);
+            }
+        } else {
+            return None;
+        };
+
+        while let Some(char) = walker.next() {
+            match char {
+                ASTERISK | LINE | UNDERSCORE => {}
+
+                NEWLINE => break,
+
+                _ => {
+                    walker.set_position(initial);
+                    return None;
+                }
+            }
+        }
+
+        let brk = Block::StyleBreak(Break {
+            id: self.get_new_id(),
+        });
+
+        Some(brk)
+    }
+
+    pub fn list(&mut self) -> Block {
         todo!()
     }
 }
@@ -306,9 +385,8 @@ impl BlockParser {
 #[cfg(test)]
 mod tests {
 
-    use crate::{block_parser::Block, walker::Walker};
-
     use super::BlockParser;
+    use crate::{block_parser::Block, walker::Walker};
 
     #[test]
     fn blockquote() {
@@ -380,6 +458,7 @@ mod tests {
         assert!(block.text.expect("text should be here").resolve(data) == "#[no_std]\n");
     }
 
+    #[test]
     fn code_tilde() {
         let data = concat!("~~~rust\n", "#[no_std]\n", "~~~").as_bytes();
 
@@ -393,5 +472,51 @@ mod tests {
         };
 
         assert!(block.text.expect("text should be here").resolve(data) == "#[no_std]\n");
+    }
+
+    #[test]
+    fn heading_simple() {
+        let data = "###### une, grande, et indivisible".as_bytes();
+
+        let mut walker = Walker::new(data);
+        let mut parser = BlockParser::new(());
+
+        let block = match parser.block(&mut walker).expect("expected block") {
+            Block::Heading(h) => h,
+
+            _ => panic!("block was not a heading"),
+        };
+
+        assert!(
+            u8::from(block.level.0) == 6,
+            "invalid level found, was supposed to be 6, is {}",
+            block.level.0
+        );
+    }
+
+    #[test]
+    fn style_break_simple() {
+        let data = concat!("___\n", "---\n", "***\n").as_bytes();
+
+        let mut walker = Walker::new(data);
+        let mut parser = BlockParser::new(());
+
+        match parser.block(&mut walker).expect("expected block") {
+            Block::StyleBreak(_) => {}
+
+            _ => panic!("block was not style break"),
+        };
+
+        match parser.block(&mut walker).expect("expected block") {
+            Block::StyleBreak(_) => {}
+
+            _ => panic!("block was not style break"),
+        };
+
+        match parser.block(&mut walker).expect("expected block") {
+            Block::StyleBreak(_) => {}
+
+            _ => panic!("block was not style break"),
+        };
     }
 }
