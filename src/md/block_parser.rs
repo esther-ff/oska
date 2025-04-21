@@ -1,12 +1,13 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::must_use_candidate)]
 use crate::md::chars::{
-    ASTERISK, BACKTICK, DOT, EQUALS, GREATER_THAN, HASH, LINE, NEWLINE, RIGHT_PAREN, SPACE, TILDE,
-    UNDERSCORE,
+    ASTERISK, BACKTICK, DOT, EQUALS, GREATER_THAN, HASH, LINE, NEWLINE, PLUS, RIGHT_PAREN, SPACE,
+    TILDE, UNDERSCORE,
 };
 use crate::walker::{StrRange, Walker};
 use core::num::NonZero;
 use core::str;
+use std::panic::Location;
 
 static BLOCK_VEC_PREALLOCATION: usize = 64;
 
@@ -177,6 +178,7 @@ pub enum Block {
 }
 
 impl Block {
+    #[track_caller]
     pub fn str_range<F>(&mut self, func: F)
     where
         F: FnOnce(&mut StrRange),
@@ -382,6 +384,8 @@ impl BlockParser {
                 self.ordered_list(start, walker)
             }
 
+            char if is_bullet_list_marker(char) => self.bullet_list(char, walker),
+
             _ => self.paragraph(walker),
         }
     }
@@ -400,7 +404,6 @@ impl BlockParser {
                 }
 
                 BACKTICK => {
-                    // let pos = walker.position();
                     let amnt_of_backticks = walker.till_not(BACKTICK);
 
                     if amnt_of_backticks >= 2 {
@@ -427,8 +430,6 @@ impl BlockParser {
             match char {
                 NEWLINE => {
                     if check_for_possible_new_block(walker) {
-                        println!("Woahl");
-                        // walker.advance(1);
                         break;
                     }
                 }
@@ -675,13 +676,7 @@ impl BlockParser {
             }
         }
 
-        let mut new_walker = Walker::new(
-            walker
-                .data()
-                .get(initial..walker.position() - 1)
-                .expect("always present"),
-        );
-
+        let mut new_walker = walker.walker_from_offset(initial);
         let mut block = self.block(&mut new_walker);
         block.adjust_range(initial + 1, initial);
 
@@ -728,18 +723,104 @@ impl BlockParser {
             }
         }
 
-        let mut new_walker = Walker::new(
-            walker
-                .data()
-                .get(initial + 1..walker.position())
-                .expect("always present"),
-        );
-
+        let mut new_walker = walker.walker_from_offset(initial + 1);
         let mut block = self.block(&mut new_walker);
         block.adjust_range(initial, initial);
         accum.push_item(block);
 
         self.ordered_list_inner(walker, accum, tightness);
+    }
+
+    fn bullet_list(&mut self, delim: u8, walker: &mut Walker<'_>) -> Block {
+        debug_assert!(
+            matches!(delim, PLUS | ASTERISK | LINE),
+            "char given to `bullet_list` was not a `+`, a `*` nor a `-`"
+        );
+
+        let initial = walker.position();
+        while let Some(char) = walker.next() {
+            if char == NEWLINE && check_for_possible_new_block(walker) {
+                break;
+            }
+
+            if char == NEWLINE
+                && walker.is_next_pred(is_bullet_list_marker)
+                && walker.peek(1) == Some(SPACE)
+            {
+                break;
+            }
+        }
+
+        let mut list_items = Vec::new();
+
+        let mut new_walker = walker.walker_from_offset(initial);
+        let mut block = self.block(&mut new_walker);
+        block.adjust_range(initial + 1, initial);
+
+        let mut tight = true;
+
+        list_items.push(ListItem {
+            number: None,
+            item: Box::new(block),
+        });
+
+        self.bullet_list_inner(walker, &mut list_items, delim, &mut tight);
+
+        Block::make_bullet_list(list_items, tight, self.get_new_id())
+    }
+
+    fn bullet_list_inner(
+        &mut self,
+        walker: &mut Walker<'_>,
+        accum: &mut Vec<ListItem>,
+        delim: u8,
+        tight: &mut bool,
+    ) {
+        debug_assert!(
+            matches!(delim, PLUS | ASTERISK | LINE),
+            "char given to `bullet_list_inner` was not a `+`, a `*` nor a `-`"
+        );
+
+        dbg!(walker.peek(0));
+        if !walker.is_next_pred(is_bullet_list_marker) && walker.peek(0) != Some(delim) {
+            return;
+        }
+
+        let initial = walker.position();
+        while let Some(char) = walker.next() {
+            if char == NEWLINE {
+                if check_for_possible_new_block(walker) {
+                    break;
+                }
+
+                if walker.is_next_char(NEWLINE) {
+                    *tight = false;
+                    walker.advance(1);
+                }
+
+                if walker.peek(0) != Some(delim)
+                    && walker.peek(0).map_or(false, is_bullet_list_marker)
+                {
+                    walker.retreat(1);
+                    return;
+                }
+
+                if walker.is_next_pred(|x| x == delim) && walker.peek(1) == Some(SPACE) {
+                    break;
+                }
+            }
+        }
+
+        let mut new_walker = walker.walker_from_offset(initial + 2);
+        let mut block = self.block(&mut new_walker);
+        block.adjust_range(initial + 1, initial + 2);
+
+        accum.push(ListItem {
+            number: None,
+            item: Box::new(block),
+        });
+
+        self.bullet_list_inner(walker, accum, delim, tight);
     }
 }
 
@@ -780,11 +861,21 @@ fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
             }
         }
 
+        char if char.is_ascii_digit() => {
+            if is_ordered_list_indicator(walker) {
+                walker.retreat(1);
+                true
+            } else {
+                false
+            }
+        }
         _ => false,
     }
 }
 
-// god remake this
+/// Used after a numeric character
+/// returns true if the 2 next characters are either `. ` or `) `.
+/// does not advance the position of the walker.
 fn is_ordered_list_indicator(walker: &mut Walker<'_>) -> bool {
     if !walker.is_next_pred(|x: u8| (x == DOT) || (x == RIGHT_PAREN))
         || walker.peek(1) != Some(SPACE)
@@ -793,6 +884,10 @@ fn is_ordered_list_indicator(walker: &mut Walker<'_>) -> bool {
     }
 
     true
+}
+
+fn is_bullet_list_marker(victim: u8) -> bool {
+    matches!(victim, ASTERISK | LINE | PLUS)
 }
 
 #[cfg(test)]
@@ -940,6 +1035,34 @@ mod tests {
             },
 
             _ => panic!("block was not an ordered list"),
+        };
+    }
+
+    #[test]
+    fn bullet_list() {
+        let data = concat!("+ Meow\n", "+ Awrff\n", "+ Bark\n",).as_bytes();
+
+        let mut walker = Walker::new(data);
+        let mut parser = BlockParser::new();
+
+        match parser.block(&mut walker) {
+            Block::List(ls) => match ls {
+                super::List::Bullet(b) => {
+                    b.items.into_iter().for_each(|x| {
+                        let string = match *x.item {
+                            Block::Paragraph(p) => p.text.unwrap().resolve(data),
+
+                            _ => panic!("not paragraph"),
+                        };
+
+                        dbg!(string);
+                    });
+                }
+
+                _ => panic!("not bullet list"),
+            },
+
+            _ => panic!("not list"),
         };
     }
 

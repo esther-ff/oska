@@ -1,4 +1,5 @@
 pub const ASTERISK: u8 = b'*';
+pub const PLUS: u8 = b'+';
 pub const UNDERSCORE: u8 = b'_';
 pub const LINE: u8 = b'-';
 pub const GREATER_THAN: u8 = b'>';

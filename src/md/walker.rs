@@ -75,6 +75,28 @@ impl<'w> Walker<'w> {
         self.data
     }
 
+    pub(crate) fn data_from_offset(&self, initial: usize) -> &[u8] {
+        debug_assert!(
+            self.position() <= self.data().len(),
+            "position of cursor is further than the data's length"
+        );
+
+        dbg!(initial);
+        dbg!(self.position());
+        debug_assert!(
+            initial <= self.position(),
+            "offset is bigger than the current position"
+        );
+
+        unsafe { self.data().get_unchecked(initial..self.position()) }
+    }
+
+    pub(crate) fn walker_from_offset(&self, initial: usize) -> Walker<'_> {
+        let data = self.data_from_offset(initial);
+
+        Walker::new(data)
+    }
+
     /// Goes one character forward.
     pub(crate) fn next(&mut self) -> Option<u8> {
         if self.position >= self.len {
