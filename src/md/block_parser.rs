@@ -1,5 +1,8 @@
+#![warn(clippy::pedantic)]
+#![allow(clippy::must_use_candidate)]
 use crate::md::chars::{
-    ASTERISK, BACKTICK, EQUALS, GREATER_THAN, HASH, LINE, NEWLINE, SPACE, TILDE, UNDERSCORE,
+    ASTERISK, BACKTICK, DOT, EQUALS, GREATER_THAN, HASH, LINE, NEWLINE, RIGHT_PAREN, SPACE, TILDE,
+    UNDERSCORE,
 };
 use crate::walker::{StrRange, Walker};
 use core::num::NonZero;
@@ -31,7 +34,68 @@ impl BlkQtLevel {
 
 // TODO: Lists...
 #[derive(Debug)]
-pub struct List;
+pub enum List {
+    Ordered(OrderedList),
+    Bullet(BulletList),
+}
+
+#[derive(Debug)]
+pub struct OrderedList {
+    tight: bool,
+    start_number: usize,
+    items: Vec<ListItem>,
+    id: usize,
+}
+
+struct OListConstructor {
+    items: Vec<ListItem>,
+    num: usize,
+    cache: usize,
+}
+
+impl OListConstructor {
+    pub fn new(num: usize) -> Self {
+        Self {
+            items: Vec::new(),
+            num,
+            cache: num,
+        }
+    }
+
+    pub fn push_item(&mut self, item: Block) {
+        self.num += 1;
+        // Safety:
+        //
+        // Valid lists start from minimally the number 0
+        // and we add 1 at the start
+        // which means the number at least will be 1
+        // so it qualifies for `NonZero<usize>`
+        let number: Option<NonZero<usize>> = unsafe { NonZero::new_unchecked(self.num) }.into();
+        let list_item = ListItem {
+            item: Box::new(item),
+            number,
+        };
+
+        self.items.push(list_item);
+    }
+
+    pub fn finish(self, id: usize, tight: bool) -> Block {
+        Block::make_ordered_list(self.cache, self.items, tight, id)
+    }
+}
+
+#[derive(Debug)]
+pub struct BulletList {
+    tight: bool,
+    items: Vec<ListItem>,
+    id: usize,
+}
+
+#[derive(Debug)]
+pub struct ListItem {
+    number: Option<NonZero<usize>>,
+    item: Box<Block>,
+}
 
 #[derive(Debug)]
 pub struct Code {
@@ -56,7 +120,7 @@ pub struct CodeMeta {
 pub enum Lang {
     None,
     Rust,
-    NotSupported(String),
+    NotSupported(Box<str>),
 }
 
 impl Lang {
@@ -70,7 +134,7 @@ impl Lang {
 
             "" => Lang::None,
 
-            unknown => Lang::NotSupported(unknown.to_string()),
+            unknown => Lang::NotSupported(unknown.to_string().into_boxed_str()),
         }
     }
 }
@@ -120,15 +184,24 @@ impl Block {
         match self {
             Self::Paragraph(para) => func(para.text.as_mut().expect("should be here")),
             Self::Blockquote(qt) => {
-                Block::str_range(qt.text.as_mut().expect("should be here"), func)
+                Block::str_range(qt.text.as_mut().expect("should be here"), func);
             }
             Self::List(_) => todo!("str_range: list"),
             Self::FencedCode(code) => func(code.text.as_mut().expect("should be here")),
-            Self::IndentedCode(_) => {}
             Self::Heading(heading) => func(heading.text.as_mut().expect("should be here")),
-            Self::StyleBreak(_) => {}
             Self::Eof => panic!("temporary: panicked due to running `str_range` on a `Block::Eof`"),
+
+            _ => {}
         }
+    }
+
+    pub fn adjust_range(&mut self, to_start: usize, to_end: usize) {
+        self.str_range(|r| {
+            r.adjust(|(start, end)| {
+                *start += to_start;
+                *end += to_end;
+            });
+        });
     }
 
     #[inline]
@@ -146,6 +219,26 @@ impl Block {
             text: range.into().map(Box::new),
             id,
         })
+    }
+
+    #[inline]
+    pub fn make_ordered_list(
+        start_number: usize,
+        items: Vec<ListItem>,
+        tight: bool,
+        id: usize,
+    ) -> Block {
+        Block::List(List::Ordered(OrderedList {
+            tight,
+            start_number,
+            items,
+            id,
+        }))
+    }
+
+    #[inline]
+    pub fn make_bullet_list(items: Vec<ListItem>, tight: bool, id: usize) -> Block {
+        Block::List(List::Bullet(BulletList { tight, items, id }))
     }
 
     #[inline]
@@ -213,10 +306,10 @@ impl Block {
                     dbg!(x.resolve(data));
                 });
             }
-            Self::Blockquote(p) => p.text.map(|x| dbg!(x.test(data))).unwrap_or(()),
+            Self::Blockquote(p) => p.text.map_or((), |x| dbg!(x.test(data))),
 
             _ => {}
-        };
+        }
     }
 }
 
@@ -242,11 +335,8 @@ impl BlockParser {
     }
 
     pub fn block(&mut self, walker: &mut Walker<'_>) -> Block {
-        let char = match walker.next() {
-            Some(c) => c,
-            None => {
-                return Block::Eof;
-            }
+        let Some(char) = walker.next() else {
+            return Block::Eof;
         };
 
         let pred = |x: u8| (x == ASTERISK) | (x == LINE) | (x == UNDERSCORE);
@@ -283,6 +373,15 @@ impl BlockParser {
                 Some(block) => block,
             },
 
+            char if char.is_ascii_digit() => {
+                let start = str::from_utf8(&[char])
+                    .expect("should always be correct utf-8")
+                    .parse::<usize>()
+                    .expect("should be a correct number in string form");
+
+                self.ordered_list(start, walker)
+            }
+
             _ => self.paragraph(walker),
         }
     }
@@ -311,7 +410,7 @@ impl BlockParser {
                 }
 
                 _ => {}
-            };
+            }
         }
 
         Block::make_paragraph(StrRange::new(initial, walker.position()), self.get_new_id())
@@ -322,49 +421,15 @@ impl BlockParser {
         let level = walker.till_not(GREATER_THAN);
         let initial = walker.position();
 
-        let tmp = usize::from(walker.is_next_char(SPACE));
+        let space = usize::from(walker.is_next_char(SPACE));
 
         while let Some(char) = walker.next() {
             match char {
                 NEWLINE => {
-                    if walker.is_next_char(NEWLINE) {
-                        walker.advance(1);
+                    if check_for_possible_new_block(walker) {
+                        println!("Woahl");
+                        // walker.advance(1);
                         break;
-                    }
-
-                    let next = match walker.peek(0) {
-                        None => todo!(),
-                        Some(val) => val,
-                    };
-
-                    match next {
-                        NEWLINE => {
-                            walker.advance(1);
-                            break;
-                        }
-
-                        BACKTICK => {
-                            // let pos = walker.position();
-                            let amnt_of_backticks = walker.till_not(BACKTICK);
-
-                            if amnt_of_backticks < 3 {
-                                walker.retreat(amnt_of_backticks);
-                                break;
-                            }
-                        }
-
-                        HASH => {
-                            // let pos = walker.position();
-                            let amnt_of_hashes = walker.till_not(HASH);
-                            let is_after_space = walker.is_next_char(SPACE);
-
-                            if 6 > amnt_of_hashes || is_after_space {
-                                walker.retreat(amnt_of_hashes);
-                                break;
-                            }
-                        }
-
-                        _ => {}
                     }
                 }
 
@@ -372,7 +437,7 @@ impl BlockParser {
                     let amnt_of = walker.till_not(GREATER_THAN);
 
                     if amnt_of > level {
-                        walker.retreat(amnt_of);
+                        walker.retreat(amnt_of + 1);
                         break;
                     }
 
@@ -384,8 +449,6 @@ impl BlockParser {
             }
         }
 
-        dbg!(walker.position());
-
         let piece = walker
             .data()
             .get(initial..walker.position())
@@ -396,12 +459,7 @@ impl BlockParser {
             Block::Eof => None,
 
             mut val => {
-                val.str_range(|range| {
-                    range.adjust(|(start, end)| {
-                        *start += initial + tmp;
-                        *end += initial - tmp;
-                    })
-                });
+                val.adjust_range(initial + space, initial);
 
                 Some(val)
             }
@@ -431,16 +489,19 @@ impl BlockParser {
             if char == CHAR {
                 walker.set_position(pos);
                 return self.paragraph(walker);
-            };
+            }
 
             if char == NEWLINE {
                 let range = StrRange::new(pos, walker.position() - 1);
 
-                let mut split = range.resolve(walker.data()).split(",");
+                let mut split = range.resolve(walker.data()).split(',');
 
-                lang = Lang::NotSupported(split.next().expect("always present").to_owned());
-
-                info = split.next().map(|x| x.to_owned());
+                lang = Lang::recognize(
+                    split
+                        .next()
+                        .expect("the first part of a `Split` iterator should be here"),
+                );
+                info = split.next().map(ToOwned::to_owned);
 
                 break;
             }
@@ -448,6 +509,7 @@ impl BlockParser {
 
         let code_start = walker.position();
         let mut code_end = walker.position();
+
         while let Some(_char) = walker.next() {
             if walker.is_next_char(CHAR) {
                 let amnt_of = walker.till_not(CHAR);
@@ -500,7 +562,7 @@ impl BlockParser {
         walker.advance(1);
         accum.push(range);
 
-        Self::indented_code_inner(walker, accum)
+        Self::indented_code_inner(walker, accum);
     }
 
     pub fn heading(&mut self, walker: &mut Walker<'_>) -> Option<Block> {
@@ -510,19 +572,19 @@ impl BlockParser {
             if temp > 5 {
                 walker.retreat(temp + 1);
                 return None;
-            };
+            }
 
-            temp as u8 + 1
+            u8::try_from(temp).unwrap_or_else(|_| unreachable!()) + 1
         } else {
             1
         };
 
-        if !walker.is_next_char(SPACE) {
+        if walker.is_next_char(SPACE) {
+            walker.advance(1);
+        } else {
             walker.retreat(level as usize);
             let para = self.paragraph(walker);
             return para.into();
-        } else {
-            walker.advance(1);
         }
 
         let range = walker.till_inclusive(NEWLINE);
@@ -565,17 +627,14 @@ impl BlockParser {
         let pred = |x| (x == ASTERISK) | (x == LINE) | (x == UNDERSCORE);
 
         if walker.is_next_pred(pred) {
-            walker.advance(1);
-
-            if !walker.is_next_pred(pred) {
-                walker.retreat(1);
+            if walker.peek(2).is_some_and(pred) {
                 return None;
             } else {
                 walker.advance(1);
             }
         } else {
             return None;
-        };
+        }
 
         while let Some(char) = walker.next() {
             match char {
@@ -593,9 +652,147 @@ impl BlockParser {
         Block::make_style_break(self.get_new_id()).into()
     }
 
-    pub fn list(&mut self) -> Block {
-        todo!()
+    pub fn ordered_list(&mut self, start: usize, walker: &mut Walker<'_>) -> Block {
+        if is_ordered_list_indicator(walker) {
+            walker.advance(1);
+        } else {
+            walker.retreat(1);
+
+            return self.paragraph(walker);
+        }
+
+        let initial = walker.position();
+        while let Some(char) = walker.next() {
+            if char == NEWLINE && check_for_possible_new_block(walker) {
+                break;
+            }
+
+            if char == NEWLINE && walker.is_next_pred(|x| x.is_ascii_digit()) {
+                walker.advance(1);
+                if is_ordered_list_indicator(walker) {
+                    break;
+                }
+            }
+        }
+
+        let mut new_walker = Walker::new(
+            walker
+                .data()
+                .get(initial..walker.position() - 1)
+                .expect("always present"),
+        );
+
+        let mut block = self.block(&mut new_walker);
+        block.adjust_range(initial + 1, initial);
+
+        let mut construct = OListConstructor::new(start - 1);
+        let mut tight = true;
+        construct.push_item(block);
+
+        self.ordered_list_inner(walker, &mut construct, &mut tight);
+
+        construct.finish(self.get_new_id(), tight)
     }
+
+    fn ordered_list_inner(
+        &mut self,
+        walker: &mut Walker<'_>,
+        accum: &mut OListConstructor,
+        tightness: &mut bool,
+    ) {
+        if is_ordered_list_indicator(walker) {
+            walker.advance(1);
+        } else {
+            walker.retreat(1);
+            return;
+        }
+
+        let initial = walker.position();
+        while let Some(char) = walker.next() {
+            if char == NEWLINE {
+                if check_for_possible_new_block(walker) {
+                    break;
+                }
+
+                if walker.is_next_char(NEWLINE) {
+                    *tightness = false;
+                    walker.advance(1);
+                }
+
+                walker.advance(1);
+                if is_ordered_list_indicator(walker) {
+                    break;
+                } else {
+                    walker.retreat(1);
+                }
+            }
+        }
+
+        let mut new_walker = Walker::new(
+            walker
+                .data()
+                .get(initial + 1..walker.position())
+                .expect("always present"),
+        );
+
+        let mut block = self.block(&mut new_walker);
+        block.adjust_range(initial, initial);
+        accum.push_item(block);
+
+        self.ordered_list_inner(walker, accum, tightness);
+    }
+}
+
+fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
+    let next = match walker.peek(0) {
+        None => return false,
+        Some(val) => val,
+    };
+
+    match next {
+        NEWLINE => {
+            walker.advance(1);
+            true
+        }
+
+        BACKTICK => {
+            // let pos = walker.position();
+            let amnt_of_backticks = walker.till_not(BACKTICK);
+
+            if amnt_of_backticks < 3 {
+                walker.retreat(amnt_of_backticks);
+                true
+            } else {
+                false
+            }
+        }
+
+        HASH => {
+            // let pos = walker.position();
+            let amnt_of_hashes = walker.till_not(HASH);
+            let is_after_space = walker.is_next_char(SPACE);
+
+            if 6 > amnt_of_hashes || is_after_space {
+                walker.retreat(amnt_of_hashes);
+                true
+            } else {
+                false
+            }
+        }
+
+        _ => false,
+    }
+}
+
+// god remake this
+fn is_ordered_list_indicator(walker: &mut Walker<'_>) -> bool {
+    if !walker.is_next_pred(|x: u8| (x == DOT) || (x == RIGHT_PAREN))
+        || walker.peek(1) != Some(SPACE)
+    {
+        return false;
+    }
+
+    true
 }
 
 #[cfg(test)]
@@ -630,7 +827,7 @@ mod tests {
                 match *bq.text.expect("no inner element") {
                     Block::Paragraph(para) => {
                         let text = para.text.expect("text was not present");
-                        assert!("Blockquote\n>BlockquoteNoSpace" == dbg!(text.resolve(data)));
+                        assert!("Blockquote\n>BlockquoteNoSpace\n" == text.resolve(data));
                     }
 
                     _ => panic!("inner block was not a paragraph"),
@@ -663,7 +860,7 @@ mod tests {
     fn blockquote() {
         let md = concat!(
             ">>> This is a blockquote\n",
-            ">>>> This is an another blockquote\n",
+            ">>>> This is an another blockquote\nbut a longer one!",
         )
         .as_bytes();
 
@@ -701,12 +898,49 @@ mod tests {
                 let text = para.text.unwrap();
 
                 let resolved = text.resolve(md);
-
-                assert!(resolved == "This is an another blockquote\n");
+                dbg!(resolved);
+                assert!(resolved == "This is an another blockquote\nbut a longer one!");
             }
 
             _ => assert!(false, "block was not paragraph"),
         }
+    }
+
+    #[test]
+    fn ordered_list() {
+        let data = concat!(
+            "1) Niente dei, niente padroni\n",
+            "2) No gods, no masters\n",
+            "3) Ni dieu, ni maitre\n",
+            "4) Ani boga, ani pana\n",
+        )
+        .as_bytes();
+
+        let mut walker = Walker::new(data);
+        let mut parser = BlockParser::new();
+
+        match dbg!(parser.block(&mut walker)) {
+            Block::List(ord) => match ord {
+                super::List::Ordered(order) => {
+                    let items = order.items.into_iter();
+
+                    items.for_each(|item| {
+                        match *item.item {
+                            Block::Paragraph(parap) => {
+                                println!("StrRange: {:#?}", parap.text.as_ref().unwrap().get());
+                                println!("Resolved text:\n{:#?}", parap.text.unwrap().resolve(data))
+                            }
+
+                            _ => panic!("was not paragraph"),
+                        };
+                    });
+                }
+
+                _ => panic!("list was not ordered"),
+            },
+
+            _ => panic!("block was not an ordered list"),
+        };
     }
 
     #[test]
