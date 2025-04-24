@@ -1,26 +1,27 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::must_use_candidate)]
+
 use crate::md::chars::{
     ASTERISK, BACKTICK, DOT, EQUALS, GREATER_THAN, HASH, LINE, NEWLINE, PLUS, RIGHT_PAREN, SPACE,
     TILDE, UNDERSCORE,
 };
 use crate::walker::{StrRange, Walker};
+use core::marker::PhantomData;
 use core::num::NonZero;
 use core::str;
-use std::panic::Location;
 
 static BLOCK_VEC_PREALLOCATION: usize = 64;
 
 #[derive(Debug)]
 pub struct Paragraph {
-    text: Option<StrRange>,
+    text: String,
     id: usize,
 }
 
 #[derive(Debug)]
 pub struct BlkQt {
     level: BlkQtLevel,
-    text: Option<Box<Block>>,
+    text: Option<Box<Block<Unparsed>>>,
     id: usize,
 }
 
@@ -63,7 +64,7 @@ impl OListConstructor {
         }
     }
 
-    pub fn push_item(&mut self, item: Block) {
+    pub fn push_item(&mut self, item: Block<Unparsed>) {
         self.num += 1;
         // Safety:
         //
@@ -80,7 +81,7 @@ impl OListConstructor {
         self.items.push(list_item);
     }
 
-    pub fn finish(self, id: usize, tight: bool) -> Block {
+    pub fn finish(self, id: usize, tight: bool) -> Block<Unparsed> {
         Block::make_ordered_list(self.cache, self.items, tight, id)
     }
 }
@@ -95,19 +96,19 @@ pub struct BulletList {
 #[derive(Debug)]
 pub struct ListItem {
     number: Option<NonZero<usize>>,
-    item: Box<Block>,
+    item: Box<Block<Unparsed>>,
 }
 
 #[derive(Debug)]
 pub struct Code {
     meta: CodeMeta,
-    text: Option<StrRange>,
+    text: Option<String>,
     id: usize,
 }
 
 #[derive(Debug)]
 pub struct IndentCode {
-    indents: Box<[StrRange]>,
+    indents: Box<[String]>,
     id: usize,
 }
 
@@ -143,7 +144,7 @@ impl Lang {
 #[derive(Debug)]
 pub struct Heading {
     level: HeadingLevel,
-    text: Option<StrRange>,
+    text: Option<String>,
     id: usize,
 }
 
@@ -166,7 +167,12 @@ impl HeadingLevel {
 }
 
 #[derive(Debug)]
-pub enum Block {
+struct Parsed;
+#[derive(Debug)]
+struct Unparsed;
+
+#[derive(Debug)]
+pub enum Block<State> {
     Paragraph(Paragraph),
     Blockquote(BlkQt),
     List(List),
@@ -175,47 +181,22 @@ pub enum Block {
     Heading(Heading),
     StyleBreak(Break),
     Eof,
+
+    _State(PhantomData<State>),
 }
 
-impl Block {
-    #[track_caller]
-    pub fn str_range<F>(&mut self, func: F)
-    where
-        F: FnOnce(&mut StrRange),
-    {
-        match self {
-            Self::Paragraph(para) => func(para.text.as_mut().expect("should be here")),
-            Self::Blockquote(qt) => {
-                Block::str_range(qt.text.as_mut().expect("should be here"), func);
-            }
-            Self::List(_) => todo!("str_range: list"),
-            Self::FencedCode(code) => func(code.text.as_mut().expect("should be here")),
-            Self::Heading(heading) => func(heading.text.as_mut().expect("should be here")),
-            Self::Eof => panic!("temporary: panicked due to running `str_range` on a `Block::Eof`"),
-
-            _ => {}
-        }
-    }
-
-    pub fn adjust_range(&mut self, to_start: usize, to_end: usize) {
-        self.str_range(|r| {
-            r.adjust(|(start, end)| {
-                *start += to_start;
-                *end += to_end;
-            });
-        });
+impl Block<Unparsed> {
+    #[inline]
+    pub fn make_paragraph(text: String, id: usize) -> Block<Unparsed> {
+        Block::Paragraph(Paragraph { text, id })
     }
 
     #[inline]
-    pub fn make_paragraph(range: impl Into<Option<StrRange>>, id: usize) -> Block {
-        Block::Paragraph(Paragraph {
-            text: range.into(),
-            id,
-        })
-    }
-
-    #[inline]
-    pub fn make_blockquote(range: impl Into<Option<Block>>, id: usize, level: usize) -> Block {
+    pub fn make_blockquote(
+        range: impl Into<Option<Block<Unparsed>>>,
+        id: usize,
+        level: usize,
+    ) -> Block<Unparsed> {
         Block::Blockquote(BlkQt {
             level: BlkQtLevel::new(level),
             text: range.into().map(Box::new),
@@ -229,7 +210,7 @@ impl Block {
         items: Vec<ListItem>,
         tight: bool,
         id: usize,
-    ) -> Block {
+    ) -> Block<Unparsed> {
         Block::List(List::Ordered(OrderedList {
             tight,
             start_number,
@@ -239,36 +220,36 @@ impl Block {
     }
 
     #[inline]
-    pub fn make_bullet_list(items: Vec<ListItem>, tight: bool, id: usize) -> Block {
+    pub fn make_bullet_list(items: Vec<ListItem>, tight: bool, id: usize) -> Block<Unparsed> {
         Block::List(List::Bullet(BulletList { tight, items, id }))
     }
 
     #[inline]
-    pub fn make_list() -> Block {
+    pub fn make_list() -> Block<Unparsed> {
         todo!()
     }
 
     #[inline]
-    pub fn make_code<T: Into<Option<StrRange>>, A: Into<Option<String>>>(
-        range: T,
-        range_meta: A,
+    pub fn make_code<A: Into<Option<String>>>(
+        code: A,
+        meta: A,
         lang: Lang,
         id: usize,
-    ) -> Block {
+    ) -> Block<Unparsed> {
         let meta = CodeMeta {
             lang,
-            info: range_meta.into(),
+            info: meta.into(),
         };
 
         Block::FencedCode(Code {
             meta,
-            text: range.into(),
+            text: code.into(),
             id,
         })
     }
 
     #[inline]
-    pub fn make_indented_code<T: Into<Box<[StrRange]>>>(indents: T, id: usize) -> Block {
+    pub fn make_indented_code<T: Into<Box<[String]>>>(indents: T, id: usize) -> Block<Unparsed> {
         Block::IndentedCode(IndentCode {
             indents: indents.into(),
             id,
@@ -276,7 +257,7 @@ impl Block {
     }
 
     #[inline]
-    pub fn make_heading(range: impl Into<Option<StrRange>>, level: u8, id: usize) -> Block {
+    pub fn make_heading(range: impl Into<Option<String>>, level: u8, id: usize) -> Block<Unparsed> {
         let heading_level = HeadingLevel::new(level);
 
         Block::Heading(Heading {
@@ -287,7 +268,7 @@ impl Block {
     }
 
     #[inline]
-    pub fn make_style_break(id: usize) -> Block {
+    pub fn make_style_break(id: usize) -> Block<Unparsed> {
         Block::StyleBreak(Break { id })
     }
 
@@ -315,8 +296,40 @@ impl Block {
     }
 }
 
+pub struct Document<State> {
+    blocks: Option<Vec<Block<State>>>,
+    _phantom: PhantomData<State>,
+}
+
+impl Document<Unparsed> {
+    pub fn new() -> Self {
+        Self {
+            blocks: None,
+            _phantom: PhantomData::<Unparsed>,
+        }
+    }
+
+    pub fn add(&mut self, val: Block<Unparsed>) {
+        match self.blocks {
+            None => {
+                let mut vec = Vec::with_capacity(128);
+
+                vec.push(val);
+
+                self.blocks.replace(vec);
+            }
+
+            Some(ref mut vec) => vec.push(val),
+        }
+    }
+
+    pub fn parse_inlines(&mut self) -> ! {
+        todo!()
+    }
+}
+
 pub(crate) struct BlockParser {
-    col: Vec<Block>,
+    col: Vec<Block<Unparsed>>,
     id: usize,
 }
 
@@ -336,7 +349,7 @@ impl BlockParser {
         id
     }
 
-    pub fn block(&mut self, walker: &mut Walker<'_>) -> Block {
+    pub fn block(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
         let Some(char) = walker.next() else {
             return Block::Eof;
         };
@@ -390,7 +403,7 @@ impl BlockParser {
         }
     }
 
-    pub fn paragraph(&mut self, walker: &mut Walker<'_>) -> Block {
+    pub fn paragraph(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
         let initial = walker.position();
 
         while let Some(char) = walker.next() {
@@ -419,7 +432,7 @@ impl BlockParser {
         Block::make_paragraph(StrRange::new(initial, walker.position()), self.get_new_id())
     }
 
-    pub fn blockquote(&mut self, walker: &mut Walker<'_>) -> Block {
+    pub fn blockquote(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
         let id = self.get_new_id();
         let level = walker.till_not(GREATER_THAN);
         let initial = walker.position();
@@ -469,7 +482,7 @@ impl BlockParser {
         Block::make_blockquote(inner, id, level)
     }
 
-    pub fn fenced_code<const CHAR: u8>(&mut self, walker: &mut Walker<'_>) -> Block {
+    pub fn fenced_code<const CHAR: u8>(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
         debug_assert!(
             CHAR == TILDE || CHAR == BACKTICK,
             "invalid char provided to the `code` function"
@@ -531,7 +544,7 @@ impl BlockParser {
         )
     }
 
-    pub fn indented_code(&mut self, walker: &mut Walker<'_>) -> Option<Block> {
+    pub fn indented_code(&mut self, walker: &mut Walker<'_>) -> Option<Block<Unparsed>> {
         let amnt_of_spaces = walker.till_not(SPACE);
 
         if amnt_of_spaces < 3 {
@@ -566,7 +579,7 @@ impl BlockParser {
         Self::indented_code_inner(walker, accum);
     }
 
-    pub fn heading(&mut self, walker: &mut Walker<'_>) -> Option<Block> {
+    pub fn heading(&mut self, walker: &mut Walker<'_>) -> Option<Block<Unparsed>> {
         let level = if walker.is_next_char(HASH) {
             let temp = walker.till_not(HASH);
 
@@ -595,11 +608,15 @@ impl BlockParser {
     }
 
     #[inline]
-    pub fn special_heading(start: usize, end: usize, id: usize) -> Block {
+    pub fn special_heading(start: usize, end: usize, id: usize) -> Block<Unparsed> {
         Block::make_heading(StrRange::new(start, end), 1, id)
     }
 
-    fn handle_special_heading(&mut self, walker: &mut Walker<'_>, initial: usize) -> Option<Block> {
+    fn handle_special_heading(
+        &mut self,
+        walker: &mut Walker<'_>,
+        initial: usize,
+    ) -> Option<Block<Unparsed>> {
         let mut heading = true;
         let pos = walker.position();
         while let Some(char) = walker.next() {
@@ -622,7 +639,7 @@ impl BlockParser {
         }
     }
 
-    pub fn style_break(&mut self, walker: &mut Walker<'_>) -> Option<Block> {
+    pub fn style_break(&mut self, walker: &mut Walker<'_>) -> Option<Block<Unparsed>> {
         let initial = walker.position();
 
         let pred = |x| (x == ASTERISK) | (x == LINE) | (x == UNDERSCORE);
@@ -653,7 +670,7 @@ impl BlockParser {
         Block::make_style_break(self.get_new_id()).into()
     }
 
-    pub fn ordered_list(&mut self, start: usize, walker: &mut Walker<'_>) -> Block {
+    pub fn ordered_list(&mut self, start: usize, walker: &mut Walker<'_>) -> Block<Unparsed> {
         if is_ordered_list_indicator(walker) {
             walker.advance(1);
         } else {
@@ -731,7 +748,7 @@ impl BlockParser {
         self.ordered_list_inner(walker, accum, tightness);
     }
 
-    fn bullet_list(&mut self, delim: u8, walker: &mut Walker<'_>) -> Block {
+    fn bullet_list(&mut self, delim: u8, walker: &mut Walker<'_>) -> Block<Unparsed> {
         debug_assert!(
             matches!(delim, PLUS | ASTERISK | LINE),
             "char given to `bullet_list` was not a `+`, a `*` nor a `-`"
@@ -888,6 +905,10 @@ fn is_ordered_list_indicator(walker: &mut Walker<'_>) -> bool {
 
 fn is_bullet_list_marker(victim: u8) -> bool {
     matches!(victim, ASTERISK | LINE | PLUS)
+}
+
+fn clear_useless_characters(string: &mut String) {
+    todo!()
 }
 
 #[cfg(test)]
