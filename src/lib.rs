@@ -1,4 +1,3 @@
-mod fast_str;
 mod html;
 mod md;
 // pub use md::lexer;

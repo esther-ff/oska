@@ -1,3 +1,5 @@
+use core::str;
+
 pub struct Walker<'w> {
     data: &'w [u8],
     len: usize,
@@ -42,40 +44,29 @@ impl StrRange {
 
 impl<'w> Walker<'w> {
     /// Creates a new `Walker`
-    /// Verifies if the bytes provided
-    /// form a UTF-8 string.
-    pub(crate) fn new<T: Into<&'w [u8]>>(data: T) -> Self {
-        // #[cfg(debug_assertions)]
-        // let _ = core::str::from_utf8(data).expect("used non-utf8 text");
-
-        let actual = data.into();
+    pub(crate) fn new(data: &'w str) -> Self {
         Self {
             last: None,
             position: 0,
-            len: actual.len(),
-            data: actual,
+            len: data.len(),
+            data: data.as_bytes(),
         }
     }
 
-    pub(crate) unsafe fn _get_rest_test(&mut self) {
-        let text = self.data.get(self.position()..self.len - 1).unwrap();
+    pub(crate) fn get(&self, start: usize, end: usize) -> &str {
+        debug_assert!(end <= self.len);
 
-        println!("{}", core::str::from_utf8(text).unwrap());
-    }
-
-    pub(crate) fn get(&self, start: usize, end: usize) -> Option<StrRange> {
-        if start > self.len && end < self.len {
-            return StrRange::new(start, end).into();
+        unsafe {
+            let data = self.data.get_unchecked(start..end);
+            str::from_utf8_unchecked(data)
         }
-
-        None
     }
 
     pub(crate) fn data(&self) -> &[u8] {
         self.data
     }
 
-    pub(crate) fn data_from_offset(&self, initial: usize) -> &[u8] {
+    pub(crate) fn string_from_offset(&self, initial: usize) -> &str {
         debug_assert!(
             self.position() <= self.data().len(),
             "position of cursor is further than the data's length"
@@ -88,11 +79,11 @@ impl<'w> Walker<'w> {
             "offset is bigger than the current position"
         );
 
-        unsafe { self.data().get_unchecked(initial..self.position()) }
+        self.get(initial, self.position())
     }
 
-    pub(crate) fn walker_from_offset(&self, initial: usize) -> Walker<'_> {
-        let data = self.data_from_offset(initial);
+    pub(crate) fn walker_from_initial(&self, offset: usize) -> Walker<'_> {
+        let data = self.string_from_offset(offset);
 
         Walker::new(data)
     }
@@ -210,7 +201,7 @@ impl<'w> Walker<'w> {
     ///
     /// assert!(w.till(b'!') == Some("Haha"));
     /// ```
-    pub(crate) fn till_inclusive(&mut self, target: u8) -> StrRange {
+    pub(crate) fn till_inclusive(&mut self, target: u8) -> &str {
         let start = self.position();
 
         while let Some(char) = self.next() {
@@ -223,7 +214,7 @@ impl<'w> Walker<'w> {
             }
         }
 
-        StrRange::new(start, self.position())
+        self.get(start, self.position())
     }
 
     /// Goes forward till it stops finding a character
@@ -260,7 +251,7 @@ mod tests {
     #[test]
     fn next() {
         let text = "******";
-        let mut w = Walker::new(text.as_bytes());
+        let mut w = Walker::new(text);
 
         while let Some(_) = w.next() {}
 
@@ -273,7 +264,7 @@ mod tests {
     fn back() {
         let text = "ABC";
 
-        let mut w = Walker::new(text.as_bytes());
+        let mut w = Walker::new(text);
 
         assert!(w.next().unwrap() == b'A');
 
@@ -286,7 +277,7 @@ mod tests {
     fn peek() {
         let text = "ABCDEF";
 
-        let w = Walker::new(text.as_bytes());
+        let w = Walker::new(text);
 
         assert!(w.peek(123).is_none());
         assert!(w.peek(5).unwrap() == b'F');
@@ -296,7 +287,7 @@ mod tests {
     fn is_next_char() {
         let text = "HAHA";
 
-        let mut w = Walker::new(text.as_bytes());
+        let mut w = Walker::new(text);
 
         assert!(w.next().unwrap() == b'H');
 
@@ -307,7 +298,7 @@ mod tests {
     fn is_next_pred() {
         let text = "ABC";
 
-        let mut w = Walker::new(text.as_bytes());
+        let mut w = Walker::new(text);
 
         assert!(w.next().unwrap() == b'A');
         assert!(w.is_next_pred(|char| char == b'B'));
@@ -317,7 +308,7 @@ mod tests {
     fn till_not() {
         let text = "!!!!!!";
 
-        let mut w = Walker::new(text.as_bytes());
+        let mut w = Walker::new(text);
 
         assert!(w.till_not(b'!') == 6);
     }
@@ -326,7 +317,7 @@ mod tests {
     fn till() {
         let text = "i like cake!";
 
-        let mut w = Walker::new(text.as_bytes());
+        let mut w = Walker::new(text);
 
         let string = w.till(b'!').unwrap().resolve(text.as_bytes());
 
@@ -337,7 +328,7 @@ mod tests {
     fn till_not_and_next() {
         let text = "**Wawa";
 
-        let mut w = Walker::new(text.as_bytes());
+        let mut w = Walker::new(text);
 
         assert!(w.till_not(b'*') == 2);
         assert!(w.next() == Some(b'W'))

@@ -167,9 +167,9 @@ impl HeadingLevel {
 }
 
 #[derive(Debug)]
-pub struct Parsed;
+struct Parsed;
 #[derive(Debug)]
-pub struct Unparsed;
+struct Unparsed;
 
 #[derive(Debug)]
 pub enum Block<State> {
@@ -230,9 +230,9 @@ impl Block<Unparsed> {
     }
 
     #[inline]
-    pub fn make_code(
-        code: impl Into<Option<String>>,
-        meta: impl Into<Option<String>>,
+    pub fn make_code<A: Into<Option<String>>>(
+        code: A,
+        meta: A,
         lang: Lang,
         id: usize,
     ) -> Block<Unparsed> {
@@ -302,12 +302,6 @@ impl Document<Unparsed> {
 
     pub fn parse_inlines(&mut self) -> ! {
         todo!()
-    }
-}
-
-impl Default for Document<Unparsed> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -413,21 +407,10 @@ impl BlockParser {
         }
 
         let mut string = String::with_capacity(walker.position() - initial);
-        let mut iter = walker.get(initial, walker.position()).chars();
-
-        if let Some(char) = iter.next() {
-            if char != ' ' {
-                string.push(char)
-            }
-        }
-
-        iter.filter(|char| char != &'>')
+        let data = unsafe { str::from_utf8_unchecked(walker.get(initial, walker.position())) }
+            .chars()
             .map(|char| if char == '\n' { ' ' } else { char })
             .for_each(|char| String::push(&mut string, char));
-
-        if let Some(" ") = string.get(string.len() - 1..) {
-            let _space = string.pop();
-        }
 
         Block::make_paragraph(string, self.get_new_id())
     }
@@ -436,7 +419,8 @@ impl BlockParser {
         let id = self.get_new_id();
         let level = walker.till_not(GREATER_THAN);
         let initial = walker.position();
-        let space: usize = walker.is_next_char(SPACE).into();
+
+        let space = usize::from(walker.is_next_char(SPACE));
 
         while let Some(char) = walker.next() {
             match char {
@@ -462,15 +446,23 @@ impl BlockParser {
             }
         }
 
-        let mut new_walker = walker.walker_from_initial(initial);
+        let piece = walker
+            .data()
+            .get(initial..walker.position())
+            .expect("this access should be in bounds");
 
+        let mut new_walker = Walker::new(piece);
         let inner = match self.block(&mut new_walker) {
             Block::Eof => None,
 
-            val => Some(val),
+            mut val => {
+                val.adjust_range(initial + space, initial);
+
+                Some(val)
+            }
         };
 
-        Block::make_blockquote(dbg!(inner), id, level)
+        Block::make_blockquote(inner, id, level)
     }
 
     pub fn fenced_code<const CHAR: u8>(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
@@ -527,9 +519,12 @@ impl BlockParser {
             }
         }
 
-        let string = String::from(walker.get(code_start, code_end));
-
-        Block::make_code(string, info, lang, self.get_new_id())
+        Block::make_code(
+            StrRange::new(code_start, code_end),
+            info,
+            lang,
+            self.get_new_id(),
+        )
     }
 
     pub fn indented_code(&mut self, walker: &mut Walker<'_>) -> Option<Block<Unparsed>> {
@@ -540,44 +535,32 @@ impl BlockParser {
             return None;
         }
 
-        let mut lines = Vec::with_capacity(BLOCK_VEC_PREALLOCATION);
+        let mut ranges = Vec::with_capacity(BLOCK_VEC_PREALLOCATION);
 
-        let entry = String::from(walker.till_inclusive(NEWLINE));
-        lines.push(entry);
+        let range = walker.till_inclusive(NEWLINE);
+        ranges.push(range);
 
         walker.advance(1);
+        Self::indented_code_inner(walker, &mut ranges);
 
-        loop {
-            let amnt_of_spaces = walker.till_not(SPACE);
-
-            if amnt_of_spaces < 4 {
-                walker.retreat(amnt_of_spaces);
-                break;
-            }
-
-            let entry = walker.till_inclusive(NEWLINE);
-            lines.push(String::from(entry));
-            walker.advance(1);
-        }
-
-        Block::make_indented_code(lines.into_boxed_slice(), self.get_new_id()).into()
+        Block::make_indented_code(ranges, self.get_new_id()).into()
     }
 
-    // fn indented_code_inner<'a>(walker: &'a mut Walker<'_>, accum: &mut Vec<&'a str>) {
-    //     let amnt_of_spaces = walker.till_not(SPACE);
+    fn indented_code_inner(walker: &mut Walker<'_>, accum: &mut Vec<StrRange>) {
+        let amnt_of_spaces = walker.till_not(SPACE);
 
-    //     if amnt_of_spaces < 4 {
-    //         walker.retreat(amnt_of_spaces);
-    //         return;
-    //     }
+        if amnt_of_spaces < 4 {
+            walker.retreat(amnt_of_spaces);
+            return;
+        }
 
-    //     let range = walker.till_inclusive(NEWLINE);
+        let range = walker.till_inclusive(NEWLINE);
 
-    //     walker.advance(1);
-    //     accum.push(range);
+        walker.advance(1);
+        accum.push(range);
 
-    //     Self::indented_code_inner(walker, accum);
-    // }
+        Self::indented_code_inner(walker, accum);
+    }
 
     pub fn heading(&mut self, walker: &mut Walker<'_>) -> Option<Block<Unparsed>> {
         let level = if walker.is_next_char(HASH) {
@@ -601,21 +584,15 @@ impl BlockParser {
             return para.into();
         }
 
-        let range = String::from(walker.till_inclusive(NEWLINE));
+        let range = walker.till_inclusive(NEWLINE);
         walker.advance(1);
 
         Block::make_heading(range, level, self.get_new_id()).into()
     }
 
     #[inline]
-    pub fn special_heading(
-        start: usize,
-        end: usize,
-        walker: &mut Walker<'_>,
-        id: usize,
-    ) -> Block<Unparsed> {
-        let string = String::from(walker.get(start, end));
-        Block::make_heading(string, 1, id)
+    pub fn special_heading(start: usize, end: usize, id: usize) -> Block<Unparsed> {
+        Block::make_heading(StrRange::new(start, end), 1, id)
     }
 
     fn handle_special_heading(
@@ -639,7 +616,7 @@ impl BlockParser {
         }
 
         if heading {
-            Self::special_heading(initial - 1, pos - 1, walker, self.get_new_id()).into()
+            Self::special_heading(initial - 1, pos - 1, self.get_new_id()).into()
         } else {
             None
         }
@@ -653,9 +630,9 @@ impl BlockParser {
         if walker.is_next_pred(pred) {
             if walker.peek(2).is_some_and(pred) {
                 return None;
+            } else {
+                walker.advance(1);
             }
-
-            walker.advance(1);
         } else {
             return None;
         }
@@ -699,8 +676,9 @@ impl BlockParser {
             }
         }
 
-        let mut new_walker = walker.walker_from_initial(initial);
-        let block = self.block(&mut new_walker);
+        let mut new_walker = walker.walker_from_offset(initial);
+        let mut block = self.block(&mut new_walker);
+        block.adjust_range(initial + 1, initial);
 
         let mut construct = OListConstructor::new(start - 1);
         let mut tight = true;
@@ -739,14 +717,15 @@ impl BlockParser {
                 walker.advance(1);
                 if is_ordered_list_indicator(walker) {
                     break;
+                } else {
+                    walker.retreat(1);
                 }
-
-                walker.retreat(1);
             }
         }
 
-        let mut new_walker = walker.walker_from_initial(initial + 1);
-        let block = self.block(&mut new_walker);
+        let mut new_walker = walker.walker_from_offset(initial + 1);
+        let mut block = self.block(&mut new_walker);
+        block.adjust_range(initial, initial);
         accum.push_item(block);
 
         self.ordered_list_inner(walker, accum, tightness);
@@ -774,8 +753,9 @@ impl BlockParser {
 
         let mut list_items = Vec::new();
 
-        let mut new_walker = walker.walker_from_initial(initial);
-        let block = self.block(&mut new_walker);
+        let mut new_walker = walker.walker_from_offset(initial);
+        let mut block = self.block(&mut new_walker);
+        block.adjust_range(initial + 1, initial);
 
         let mut tight = true;
 
@@ -819,7 +799,7 @@ impl BlockParser {
                 }
 
                 if walker.peek(0) != Some(delim)
-                    && walker.peek(0).is_some_and(is_bullet_list_marker)
+                    && walker.peek(0).map_or(false, is_bullet_list_marker)
                 {
                     walker.retreat(1);
                     return;
@@ -831,8 +811,9 @@ impl BlockParser {
             }
         }
 
-        let mut new_walker = walker.walker_from_initial(initial + 2);
-        let block = self.block(&mut new_walker);
+        let mut new_walker = walker.walker_from_offset(initial + 2);
+        let mut block = self.block(&mut new_walker);
+        block.adjust_range(initial + 1, initial + 2);
 
         accum.push(ListItem {
             number: None,
@@ -909,14 +890,6 @@ fn is_bullet_list_marker(victim: u8) -> bool {
     matches!(victim, ASTERISK | LINE | PLUS)
 }
 
-fn is_useless_char(char: u8) -> bool {
-    match char {
-        GREATER_THAN => true,
-
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -938,7 +911,8 @@ mod tests {
             "Heading with equals\n",
             "======\n",
             "and let's have a nice paragraph\n",
-        );
+        )
+        .as_bytes();
 
         let mut walker = Walker::new(data);
         let mut parser = BlockParser::new();
@@ -947,8 +921,8 @@ mod tests {
             Block::Blockquote(bq) => {
                 match *bq.text.expect("no inner element") {
                     Block::Paragraph(para) => {
-                        let text = para.text;
-                        assert!("Blockquote BlockquoteNoSpace" == text);
+                        let text = para.text.expect("text was not present");
+                        assert!("Blockquote\n>BlockquoteNoSpace\n" == text.resolve(data));
                     }
 
                     _ => panic!("inner block was not a paragraph"),
@@ -962,7 +936,7 @@ mod tests {
             Block::Heading(h) => {
                 let text = h.text.expect("no text present in heading");
 
-                assert!(text == "Heading");
+                assert!(text.resolve(data) == "Heading");
                 assert!(u8::from(h.level.0) == 1);
             }
 
@@ -982,7 +956,8 @@ mod tests {
         let md = concat!(
             ">>> This is a blockquote\n",
             ">>>> This is an another blockquote\nbut a longer one!",
-        );
+        )
+        .as_bytes();
 
         let mut parser = BlockParser::new();
         let mut walker = Walker::new(md);
@@ -996,9 +971,11 @@ mod tests {
 
         match inner {
             Block::Paragraph(para) => {
-                let text = para.text;
+                let text = para.text.unwrap();
 
-                assert!(text == "This is a blockquote");
+                let resolved = text.resolve(md);
+
+                assert!(dbg!(resolved) == "This is a blockquote\n");
             }
 
             _ => assert!(false, "block was not paragraph"),
@@ -1013,9 +990,11 @@ mod tests {
 
         match inner {
             Block::Paragraph(para) => {
-                let text = para.text;
+                let text = para.text.unwrap();
 
-                assert!(text == "This is an another blockquote but a longer one!");
+                let resolved = text.resolve(md);
+                dbg!(resolved);
+                assert!(resolved == "This is an another blockquote\nbut a longer one!");
             }
 
             _ => assert!(false, "block was not paragraph"),
@@ -1029,7 +1008,8 @@ mod tests {
             "2) No gods, no masters\n",
             "3) Ni dieu, ni maitre\n",
             "4) Ani boga, ani pana\n",
-        );
+        )
+        .as_bytes();
 
         let mut walker = Walker::new(data);
         let mut parser = BlockParser::new();
@@ -1042,7 +1022,8 @@ mod tests {
                     items.for_each(|item| {
                         match *item.item {
                             Block::Paragraph(parap) => {
-                                println!("text:\n{:#?}", parap.text)
+                                println!("StrRange: {:#?}", parap.text.as_ref().unwrap().get());
+                                println!("Resolved text:\n{:#?}", parap.text.unwrap().resolve(data))
                             }
 
                             _ => panic!("was not paragraph"),
@@ -1059,7 +1040,7 @@ mod tests {
 
     #[test]
     fn bullet_list() {
-        let data = concat!("+ Meow\n", "+ Awrff\n", "+ Bark\n");
+        let data = concat!("+ Meow\n", "+ Awrff\n", "+ Bark\n",).as_bytes();
 
         let mut walker = Walker::new(data);
         let mut parser = BlockParser::new();
@@ -1069,7 +1050,7 @@ mod tests {
                 super::List::Bullet(b) => {
                     b.items.into_iter().for_each(|x| {
                         let string = match *x.item {
-                            Block::Paragraph(p) => p.text,
+                            Block::Paragraph(p) => p.text.unwrap().resolve(data),
 
                             _ => panic!("not paragraph"),
                         };
@@ -1087,7 +1068,7 @@ mod tests {
 
     #[test]
     fn code() {
-        let data = concat!("```rust\n", "#[no_std]\n", "```");
+        let data = concat!("```rust\n", "#[no_std]\n", "```").as_bytes();
 
         let mut walker = Walker::new(data);
         let mut parser = BlockParser::new();
@@ -1098,12 +1079,12 @@ mod tests {
             _ => panic!("block was not fenced code"),
         };
 
-        assert!(block.text.expect("text should be here") == "#[no_std]\n");
+        assert!(block.text.expect("text should be here").resolve(data) == "#[no_std]\n");
     }
 
     #[test]
     fn code_tilde() {
-        let data = concat!("~~~rust\n", "#[no_std]\n", "~~~");
+        let data = concat!("~~~rust\n", "#[no_std]\n", "~~~").as_bytes();
 
         let mut walker = Walker::new(data);
         let mut parser = BlockParser::new();
@@ -1114,7 +1095,7 @@ mod tests {
             _ => panic!("block was not fenced code"),
         };
 
-        assert!(block.text.expect("text should be here") == "#[no_std]\n");
+        assert!(block.text.expect("text should be here").resolve(data) == "#[no_std]\n");
     }
 
     #[test]
@@ -1127,7 +1108,7 @@ mod tests {
             "       code line 5\n",
         );
 
-        let mut walker = Walker::new(data);
+        let mut walker = Walker::new(data.as_bytes());
         let mut parser = BlockParser::new();
 
         let block = parser.block(&mut walker);
@@ -1141,7 +1122,7 @@ mod tests {
             .indents
             .into_iter()
             .enumerate()
-            .map(|(index, val)| (index + 1, val))
+            .map(|(index, val)| (index + 1, val.resolve(data.as_bytes())))
             .for_each(|(index, value)| {
                 let test = format!("code line {}", index);
 
@@ -1151,7 +1132,7 @@ mod tests {
 
     #[test]
     fn heading_simple() {
-        let data = "###### une, grande, et indivisible";
+        let data = "###### une, grande, et indivisible".as_bytes();
 
         let mut walker = Walker::new(data);
         let mut parser = BlockParser::new();
@@ -1169,14 +1150,14 @@ mod tests {
         );
 
         assert!(
-            block.text.expect("should be here") == "une, grande, et indivisible",
+            block.text.expect("should be here").resolve(data) == "une, grande, et indivisible",
             "invalid text in heading"
         );
     }
 
     #[test]
     fn heading_under() {
-        let data = concat!("Heading text\n", "======",);
+        let data = concat!("Heading text\n", "======",).as_bytes();
 
         let mut walker = Walker::new(data);
         let mut parser = BlockParser::new();
@@ -1194,14 +1175,14 @@ mod tests {
         );
 
         assert!(
-            block.text.expect("should be here") == "Heading text",
+            block.text.expect("should be here").resolve(data) == "Heading text",
             "invalid text in heading"
         );
     }
 
     #[test]
     fn style_break_simple() {
-        let data = concat!("___\n", "---\n", "***\n");
+        let data = concat!("___\n", "---\n", "***\n").as_bytes();
 
         let mut walker = Walker::new(data);
         let mut parser = BlockParser::new();
