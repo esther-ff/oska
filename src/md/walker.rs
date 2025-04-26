@@ -72,8 +72,6 @@ impl<'w> Walker<'w> {
             "position of cursor is further than the data's length"
         );
 
-        dbg!(initial);
-        dbg!(self.position());
         debug_assert!(
             initial <= self.position(),
             "offset is bigger than the current position"

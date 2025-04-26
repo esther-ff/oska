@@ -394,25 +394,29 @@ impl BlockParser {
         let initial = walker.position();
 
         while let Some(char) = walker.next() {
-            // dbg!(str::from_utf8(&[char]));
             match char {
                 ch if (ch == NEWLINE) && walker.is_next_char(NEWLINE) => break,
 
-                NEWLINE if walker.is_next_char(EQUALS) => {
-                    if let Some(block) = self.handle_special_heading(walker, initial) {
-                        return block;
+                NEWLINE => {
+                    if walker.is_next_char(EQUALS) {
+                        if let Some(block) = self.handle_special_heading(walker, initial) {
+                            return block;
+                        }
                     }
-                }
 
-                BACKTICK => {
-                    let amnt_of_backticks = walker.till_not(BACKTICK);
-
-                    if amnt_of_backticks >= 2 {
-                        walker.retreat(amnt_of_backticks + 1);
+                    if check_for_possible_new_block(walker) {
                         break;
                     }
                 }
 
+                // BACKTICK => {
+                //     let amnt_of_backticks = walker.till_not(BACKTICK);
+
+                //     if amnt_of_backticks >= 2 {
+                //         walker.retreat(amnt_of_backticks + 1);
+                //         break;
+                //     }
+                // }
                 _ => {}
             }
         }
@@ -475,7 +479,7 @@ impl BlockParser {
             val => Some(val),
         };
 
-        Block::make_blockquote(dbg!(inner), id, level)
+        Block::make_blockquote(inner, id, level)
     }
 
     pub fn fenced_code<const CHAR: u8>(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
@@ -586,8 +590,7 @@ impl BlockParser {
             walker.advance(1);
         } else {
             walker.retreat(level as usize);
-            let para = self.paragraph(walker);
-            return para.into();
+            return self.paragraph(walker).into();
         }
 
         let range = String::from(walker.till_inclusive(NEWLINE));
@@ -706,6 +709,8 @@ impl BlockParser {
         let mut tight = true;
         construct.push_item(block);
 
+        walker.advance(1);
+
         self.ordered_list_inner(walker, &mut construct, &mut tight);
 
         construct.finish(self.get_new_id(), tight)
@@ -718,7 +723,6 @@ impl BlockParser {
         tightness: &mut bool,
     ) {
         if is_ordered_list_indicator(walker) {
-            walker.advance(1);
         } else {
             walker.retreat(1);
             return;
@@ -748,6 +752,8 @@ impl BlockParser {
         let mut new_walker = walker.walker_from_initial(initial + 1);
         let block = self.block(&mut new_walker);
         accum.push_item(block);
+
+        walker.advance(1);
 
         self.ordered_list_inner(walker, accum, tightness);
     }
@@ -801,7 +807,6 @@ impl BlockParser {
             "char given to `bullet_list_inner` was not a `+`, a `*` nor a `-`"
         );
 
-        dbg!(walker.peek(0));
         if !walker.is_next_pred(is_bullet_list_marker) && walker.peek(0) != Some(delim) {
             return;
         }
@@ -831,7 +836,7 @@ impl BlockParser {
             }
         }
 
-        let mut new_walker = walker.walker_from_initial(initial + 2);
+        let mut new_walker = walker.walker_from_initial(initial + 1);
         let block = self.block(&mut new_walker);
 
         accum.push(ListItem {
@@ -849,6 +854,12 @@ fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
         Some(val) => val,
     };
 
+    // let cur_part = walker.get(walker.position(), walker.data().len() - 1);
+    // dbg!(cur_part);
+    // let n = &[next];
+    // let cur_char = str::from_utf8(n).unwrap();
+    // dbg!(cur_char);
+
     match next {
         NEWLINE => {
             walker.advance(1);
@@ -859,8 +870,9 @@ fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
             // let pos = walker.position();
             let amnt_of_backticks = walker.till_not(BACKTICK);
 
-            if amnt_of_backticks < 3 {
+            if amnt_of_backticks <= 3 {
                 walker.retreat(amnt_of_backticks);
+
                 true
             } else {
                 false
@@ -868,11 +880,10 @@ fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
         }
 
         HASH => {
-            // let pos = walker.position();
             let amnt_of_hashes = walker.till_not(HASH);
             let is_after_space = walker.is_next_char(SPACE);
 
-            if 6 > amnt_of_hashes || is_after_space {
+            if 6 > amnt_of_hashes && is_after_space {
                 walker.retreat(amnt_of_hashes);
                 true
             } else {
@@ -881,12 +892,23 @@ fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
         }
 
         char if char.is_ascii_digit() => {
+            walker.advance(1);
             if is_ordered_list_indicator(walker) {
                 walker.retreat(1);
                 true
             } else {
+                walker.retreat(1);
                 false
             }
+        }
+
+        char if is_bullet_list_marker(char) => {
+            walker.advance(1);
+            let bool = walker.is_next_char(SPACE);
+
+            walker.retreat(1);
+
+            bool
         }
         _ => false,
     }
@@ -938,6 +960,13 @@ mod tests {
             "Heading with equals\n",
             "======\n",
             "and let's have a nice paragraph\n",
+            "1) Order 1\n",
+            "2) Order 2\n",
+            "3) Order 3\n",
+            "4) Order 4\n",
+            "+ Meow\n",
+            "+ Awrff\n",
+            "+ Bark\n"
         );
 
         let mut walker = Walker::new(data);
@@ -948,7 +977,10 @@ mod tests {
                 match *bq.text.expect("no inner element") {
                     Block::Paragraph(para) => {
                         let text = para.text;
-                        assert!("Blockquote BlockquoteNoSpace" == text);
+                        assert!(
+                            "Blockquote BlockquoteNoSpace" == text,
+                            "invalid text, was: {text}"
+                        );
                     }
 
                     _ => panic!("inner block was not a paragraph"),
@@ -1037,11 +1069,53 @@ mod tests {
             any => panic!("block was not `Paragraph`, was: {:#?}", any),
         };
 
-        match parser.block(&mut walker) {
-            Block::Eof => {}
+        match dbg!(parser.block(&mut walker)) {
+            Block::List(ord) => match ord {
+                super::List::Ordered(order) => {
+                    let items = order.items.into_iter();
 
-            any => panic!("not EOF, block returned was: {:#?}", any),
+                    items.for_each(|item| {
+                        match *item.item {
+                            Block::Paragraph(parap) => {
+                                println!("text:\n{:#?}", parap.text)
+                            }
+
+                            _ => panic!("was not paragraph"),
+                        };
+                    });
+                }
+
+                _ => panic!("list was not ordered"),
+            },
+
+            _ => panic!("block was not an ordered list"),
         };
+
+        match parser.block(&mut walker) {
+            Block::List(ls) => match ls {
+                super::List::Bullet(b) => {
+                    b.items.into_iter().for_each(|x| {
+                        let string = match *x.item {
+                            Block::Paragraph(p) => p.text,
+
+                            any => panic!("not paragraph, is: {any:#?}"),
+                        };
+
+                        dbg!(string);
+                    });
+                }
+
+                any => panic!("not bullet list, is: {any:#?} "),
+            },
+
+            any => panic!("not list, is: {any:#?}"),
+        };
+
+        // match parser.block(&mut walker) {
+        //     Block::Eof => {}
+
+        //     any => panic!("not EOF, block returned was: {:#?}", any),
+        // };
     }
 
     #[test]
