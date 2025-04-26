@@ -312,19 +312,20 @@ impl Default for Document<Unparsed> {
 }
 
 pub(crate) struct BlockParser {
-    col: Vec<Block<Unparsed>>,
+    col: Document<Unparsed>,
     id: usize,
 }
 
 impl BlockParser {
+    /// Creates a new `BlockParser`
     pub fn new() -> Self {
         Self {
-            col: Vec::with_capacity(64),
+            col: Document::default(),
             id: 0,
         }
     }
 
-    pub fn get_new_id(&mut self) -> usize {
+    fn get_new_id(&mut self) -> usize {
         let id = self.id;
 
         self.id += 1;
@@ -332,6 +333,9 @@ impl BlockParser {
         id
     }
 
+    /// Parses some block into a "unparsed state"
+    /// meaning the block has text contents that are yet to be parsed
+    /// into inlines via a `InlineParser`.
     pub fn block(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
         let Some(char) = walker.next() else {
             return Block::Eof;
@@ -390,6 +394,7 @@ impl BlockParser {
         let initial = walker.position();
 
         while let Some(char) = walker.next() {
+            // dbg!(str::from_utf8(&[char]));
             match char {
                 ch if (ch == NEWLINE) && walker.is_next_char(NEWLINE) => break,
 
@@ -417,7 +422,7 @@ impl BlockParser {
 
         if let Some(char) = iter.next() {
             if char != ' ' {
-                string.push(char)
+                string.push(char);
             }
         }
 
@@ -563,22 +568,6 @@ impl BlockParser {
         Block::make_indented_code(lines.into_boxed_slice(), self.get_new_id()).into()
     }
 
-    // fn indented_code_inner<'a>(walker: &'a mut Walker<'_>, accum: &mut Vec<&'a str>) {
-    //     let amnt_of_spaces = walker.till_not(SPACE);
-
-    //     if amnt_of_spaces < 4 {
-    //         walker.retreat(amnt_of_spaces);
-    //         return;
-    //     }
-
-    //     let range = walker.till_inclusive(NEWLINE);
-
-    //     walker.advance(1);
-    //     accum.push(range);
-
-    //     Self::indented_code_inner(walker, accum);
-    // }
-
     pub fn heading(&mut self, walker: &mut Walker<'_>) -> Option<Block<Unparsed>> {
         let level = if walker.is_next_char(HASH) {
             let temp = walker.till_not(HASH);
@@ -608,7 +597,8 @@ impl BlockParser {
     }
 
     #[inline]
-    pub fn special_heading(
+    /// helper function for creating a heading
+    fn special_heading(
         start: usize,
         end: usize,
         walker: &mut Walker<'_>,
@@ -618,6 +608,13 @@ impl BlockParser {
         Block::make_heading(string, 1, id)
     }
 
+    // helper function for a heading
+    // made by using equals under some text
+    // like:
+    // ```
+    // My heading
+    // ==========
+    // ```
     fn handle_special_heading(
         &mut self,
         walker: &mut Walker<'_>,
@@ -627,7 +624,10 @@ impl BlockParser {
         let pos = walker.position();
         while let Some(char) = walker.next() {
             match char {
-                NEWLINE => break,
+                NEWLINE => {
+                    walker.retreat(1);
+                    break;
+                }
 
                 EQUALS => {}
 
@@ -955,7 +955,7 @@ mod tests {
                 };
             }
 
-            _ => panic!("block was not a blockquote"),
+            any => panic!("block was not a blockquote, was: {:#?}", any),
         };
 
         match parser.block(&mut walker) {
@@ -966,15 +966,82 @@ mod tests {
                 assert!(u8::from(h.level.0) == 1);
             }
 
-            _ => panic!("block was not a blockquote"),
+            any => panic!("block was not a blockquote, was: {:#?}", any),
         };
 
-        let block = dbg!(parser.block(&mut walker));
-        let block = dbg!(parser.block(&mut walker));
-        let block = dbg!(parser.block(&mut walker));
-        let block = dbg!(parser.block(&mut walker));
-        let block = dbg!(parser.block(&mut walker));
-        let block = dbg!(parser.block(&mut walker));
+        match parser.block(&mut walker) {
+            Block::Paragraph(para) => {
+                assert!(para.text == "#BrokenHeading")
+            }
+
+            any => panic!("block was not a paragraph, was: {:#?}", any),
+        }
+
+        match parser.block(&mut walker) {
+            Block::FencedCode(code) => {
+                match code.meta.info {
+                    Some(info) => assert!("some_meta_data=noumea :3" == info, "invalid meta data"),
+                    _ => panic!("no metadata was found"),
+                }
+
+                match code.meta.lang {
+                    super::Lang::Rust => {}
+
+                    lang => panic!("invalid language recognised: {lang:#?}"),
+                }
+
+                assert!(
+                    code.text.is_some_and(|str| str == "panic!()\n"),
+                    "wrongly read code block"
+                )
+            }
+
+            any => panic!("block was not fenced code, was: {:#?}", any),
+        };
+
+        match parser.block(&mut walker) {
+            Block::IndentedCode(icode) => {
+                let text = icode.indents.get(0).expect("only indent was not present");
+
+                assert!(text == "Indented code!");
+            }
+
+            any => panic!("block was not `IndentedCode`, was: {:#?}", any),
+        }
+
+        match parser.block(&mut walker) {
+            Block::StyleBreak(_) => {}
+
+            any => panic!("block was not `StyleBreak`, was: {:#?}", any),
+        };
+
+        match parser.block(&mut walker) {
+            Block::Heading(hd) => {
+                assert!(u8::from(hd.level.0) == 1, "wrong heading level");
+                assert!(
+                    hd.text.is_some_and(|x| x == "Heading with equals"),
+                    "invalid heading text"
+                );
+            }
+
+            any => panic!("block was not `Heading`, was: {:#?}", any),
+        }
+
+        match parser.block(&mut walker) {
+            Block::Paragraph(para) => assert!(
+                para.text == "and let's have a nice paragraph",
+                "invalid paragraph text: {0}",
+                para.text
+            ),
+
+            any => panic!("block was not `Paragraph`, was: {:#?}", any),
+        };
+
+        match parser.block(&mut walker) {
+            Block::Eof => {}
+
+            any => panic!("not EOF, block returned was: {:#?}", any),
+        };
     }
 
     #[test]
@@ -1193,9 +1260,10 @@ mod tests {
             block.level.0
         );
 
+        let text = block.text.expect("should be here");
         assert!(
-            block.text.expect("should be here") == "Heading text",
-            "invalid text in heading"
+            text == "Heading text",
+            "invalid text in heading, was: {text:?}"
         );
     }
 
