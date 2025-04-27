@@ -1447,11 +1447,15 @@ mod tests {
             "<pre \t this is some serious content/pre>",
             "<script \t this is some serious content 2/script>",
             "<textarea \t this is some serious content/textarea>",
-            "<style \t this is some serious content/style>"
+            "<style \t this is some serious content/style>",
+            "<!-- html comment -->",
+            "<? whatever ?>",
+            "<!block>",
+            "<![CDATA[ \"L'Alsace et la Lorraine\" ]]>",
         );
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new();
+        let parser = BlockParser::new();
 
         let document = parser.document(&mut walker);
 
