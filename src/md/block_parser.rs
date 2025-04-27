@@ -189,6 +189,8 @@ pub struct HtmlBlock {
 }
 
 #[derive(Debug)]
+/// A enum representing all implemented types of Markdown
+/// blocks.
 pub enum Block<State> {
     Paragraph(Paragraph),
     Blockquote(BlkQt),
@@ -280,14 +282,8 @@ impl Block<Unparsed> {
         heading_level: impl Into<Option<u8>>,
         id: usize,
     ) -> Block<Unparsed> {
-        let level = match heading_level.into() {
-            Some(val) => Some(HeadingLevel::new(val)),
-
-            None => None,
-        };
-
         Block::Heading(Heading {
-            level,
+            level: heading_level.into().map(HeadingLevel::new),
             text: range.into(),
             id,
         })
@@ -305,6 +301,10 @@ impl Block<Unparsed> {
 }
 
 #[derive(Debug)]
+/// Structure that represents a Markdown document
+/// it has 2 states: `Unparsed` and `Parsed`k
+/// those relate to the state of inline elements
+/// inside blocks inside of this document
 pub struct Document<State> {
     blocks: Option<Vec<Block<State>>>,
     _phantom: PhantomData<State>,
@@ -343,6 +343,10 @@ impl Default for Document<Unparsed> {
     }
 }
 
+/// Structure reponsible for parsing a document
+/// into it's block structure
+/// which will allow for parallel processing of
+/// inline content
 pub(crate) struct BlockParser {
     col: Document<Unparsed>,
     id: usize,
@@ -372,6 +376,7 @@ impl BlockParser {
         self.col
     }
 
+    /// Generates a new id
     fn get_new_id(&mut self) -> usize {
         let id = self.id;
 
@@ -486,7 +491,7 @@ impl BlockParser {
         let id = self.get_new_id();
         let level = walker.till_not(GREATER_THAN);
         let initial = walker.position();
-        let space: usize = walker.is_next_char(SPACE).into();
+        // let space: usize = walker.is_next_char(SPACE).into();
 
         while let Some(char) = walker.next() {
             match char {
@@ -721,13 +726,13 @@ impl BlockParser {
     }
 
     pub fn ordered_list(&mut self, start: usize, walker: &mut Walker<'_>) -> Block<Unparsed> {
-        if is_ordered_list_indicator(walker) {
-            walker.advance(1);
-        } else {
+        if !is_ordered_list_indicator(walker) {
             walker.retreat(1);
 
             return self.paragraph(walker);
         }
+
+        walker.advance(1);
 
         let initial = walker.position();
         while let Some(char) = walker.next() {
@@ -763,8 +768,7 @@ impl BlockParser {
         accum: &mut OListConstructor,
         tightness: &mut bool,
     ) {
-        if is_ordered_list_indicator(walker) {
-        } else {
+        if !is_ordered_list_indicator(walker) {
             walker.retreat(1);
             return;
         }
@@ -894,14 +898,15 @@ impl BlockParser {
         for (index, cond) in SIMPLE_CONDITIONS.into_iter().enumerate() {
             if walker.find_string(cond[0]) {
                 // the `!` must be followed by an ascii character
-                if index == 7 {
-                    if !walker.is_next_pred(|x| x.is_ascii_alphabetic()) {
-                        walker.retreat(1);
-                        return self.paragraph(walker);
-                    }
+                if index == 7 && !walker.is_next_pred(|x| x.is_ascii_alphabetic()) {
+                    walker.retreat(1);
+                    return self.paragraph(walker);
                 }
 
-                let first_char_of_end = cond[1].as_bytes().get(0).expect("must be here");
+                let first_char_of_end = cond[1]
+                    .as_bytes()
+                    .first()
+                    .expect("infallible, this is a constant");
 
                 'inner: while let Some(char) = walker.next() {
                     if char == *first_char_of_end {
@@ -910,7 +915,7 @@ impl BlockParser {
                         if walker.find_string(result) {
                             break 'inner;
                         }
-                    };
+                    }
                 }
 
                 let _ = walker.till(NEWLINE);
@@ -921,7 +926,7 @@ impl BlockParser {
 
         if walker.is_next_char(b'/') {
             walker.advance(1);
-            for tag in HTML_ALLOWED_TAGS.into_iter() {
+            for tag in HTML_ALLOWED_TAGS {
                 if walker.find_string(tag) {
                     break;
                 }
@@ -944,6 +949,11 @@ impl BlockParser {
     }
 }
 
+/// Checks for a the possibility of a new block
+/// attempts to be "pure"
+/// if it returns false, the state of the parser
+/// is the same as it was before the call
+/// if it is true, the state may or may not be different
 fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
     let next = match walker.peek(0) {
         None => return false,
@@ -1023,21 +1033,23 @@ fn is_ordered_list_indicator(walker: &mut Walker<'_>) -> bool {
     true
 }
 
+/// Checks if the given character
+/// can be a bullet list marker
+/// (means: `+` or `-` or `*`)
 fn is_bullet_list_marker(victim: u8) -> bool {
     matches!(victim, ASTERISK | LINE | PLUS)
 }
 
-fn is_useless_char(char: u8) -> bool {
-    match char {
-        GREATER_THAN => true,
+// fn is_useless_char(char: u8) -> bool {
+//     match char {
+//         GREATER_THAN => true,
 
-        _ => false,
-    }
-}
+//         _ => false,
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
-
     use super::BlockParser;
     use crate::{block_parser::Block, walker::Walker};
 

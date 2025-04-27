@@ -268,7 +268,7 @@ impl<'w> Walker<'w> {
 
         let mut found = true;
 
-        for pat_byte in pat.bytes().into_iter() {
+        for pat_byte in pat.bytes() {
             let byte = match self.next() {
                 None => break,
                 Some(val) => val,
