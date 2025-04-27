@@ -70,10 +70,10 @@ pub const HTML_ALLOWED_TAGS: [&str; 63] = [
 /// `<` due to how the `Walker` handles characters
 pub const SIMPLE_CONDITIONS: [[&str; 2]; 8] = [
     // cond 1
-    ["pre \t", "/pre>"],
-    ["script \t", "/script>"],
-    ["style \t", "/style>"],
-    ["textarea \t", "/textarea>"],
+    ["pre", "</pre>"],
+    ["script", "</script>"],
+    ["style", "</style>"],
+    ["textarea", "</textarea>"],
     // cond 2
     ["!--", "-->"],
     // cond 3

@@ -13,6 +13,7 @@ use core::num::NonZero;
 use core::str;
 
 use super::chars::LESSER_THAN;
+use super::html_constants::HTML_ALLOWED_TAGS;
 
 static BLOCK_VEC_PREALLOCATION: usize = 64;
 
@@ -890,7 +891,7 @@ impl BlockParser {
     pub fn html_block(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
         let initial = walker.position();
 
-        'outer: for (index, cond) in SIMPLE_CONDITIONS.into_iter().enumerate() {
+        for (index, cond) in SIMPLE_CONDITIONS.into_iter().enumerate() {
             if walker.find_string(cond[0]) {
                 // the `!` must be followed by an ascii character
                 if index == 7 {
@@ -912,9 +913,30 @@ impl BlockParser {
                     };
                 }
 
-                break 'outer;
+                let _ = walker.till(NEWLINE);
+                let string = String::from(walker.get(initial - 1, walker.position() - 1));
+                return Block::make_html_block(string, self.get_new_id());
             }
         }
+
+        if walker.is_next_char(b'/') {
+            walker.advance(1);
+            for tag in HTML_ALLOWED_TAGS.into_iter() {
+                if walker.find_string(tag) {
+                    break;
+                }
+            }
+
+            while let Some(char) = walker.next() {
+                if (char == b'/' && walker.is_next_char(GREATER_THAN))
+                    || walker.is_next_char(GREATER_THAN)
+                {
+                    break;
+                }
+            }
+        }
+
+        let _ = walker.till(NEWLINE);
 
         let string = String::from(walker.string_from_offset(initial - 1));
 
@@ -1444,14 +1466,16 @@ mod tests {
     #[test]
     fn html_blocks() {
         let data = concat!(
-            "<pre \t this is some serious content/pre>",
-            "<script \t this is some serious content 2/script>",
-            "<textarea \t this is some serious content/textarea>",
-            "<style \t this is some serious content/style>",
-            "<!-- html comment -->",
-            "<? whatever ?>",
-            "<!block>",
-            "<![CDATA[ \"L'Alsace et la Lorraine\" ]]>",
+            "<pre va>this is some serious content</pre>\n",
+            "<script \t this is some serious content 2</script>\n",
+            "<textarea \t this is some serious content</textarea>\n",
+            "<style \t this is some serious content</style>\n",
+            "<!-- html comment -->\n",
+            "<? whatever ?>\n",
+            "<!block>\n",
+            "<![CDATA[ \"L'Alsace et la Lorraine\" ]]>\n",
+            "</address \t>\n",
+            "<vabank"
         );
 
         let mut walker = Walker::new(data);
