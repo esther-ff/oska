@@ -53,19 +53,28 @@ impl<'w> Walker<'w> {
         }
     }
 
+    /// Obtains a `&str` between `start` and `end`
+    ///
+    /// # Panics
+    /// if `end` is bigger or equal to the length of data stored
+    /// and/or if the data doesn't create a proper utf-8 string
     pub(crate) fn get(&self, start: usize, end: usize) -> &str {
         debug_assert!(end <= self.len);
 
         unsafe {
             let data = self.data.get_unchecked(start..end);
+
+            debug_assert!(core::str::from_utf8(data).is_ok());
             str::from_utf8_unchecked(data)
         }
     }
 
+    /// Returns the data as a `&[u8]`
     pub(crate) fn data(&self) -> &[u8] {
         self.data
     }
 
+    /// Returns section of data between `initial` and `self.position()`
     pub(crate) fn string_from_offset(&self, initial: usize) -> &str {
         debug_assert!(
             self.position() <= self.data().len(),
@@ -80,6 +89,7 @@ impl<'w> Walker<'w> {
         self.get(initial, self.position())
     }
 
+    /// Creates a `Walker` from the sections of data between `offset` and `self.position()`
     pub(crate) fn walker_from_initial(&self, offset: usize) -> Walker<'_> {
         let data = self.string_from_offset(offset);
 
@@ -141,6 +151,11 @@ impl<'w> Walker<'w> {
     /// Checks if the next char is equal to `target`
     pub(crate) fn is_next_char(&mut self, target: u8) -> bool {
         self.peek(0) == Some(target)
+    }
+
+    /// Returns the remainder of bytes
+    pub(crate) fn remaining(&self) -> usize {
+        self.data.len() - self.position()
     }
 
     /// Executes the given closure, using the next character as an argument
@@ -240,6 +255,34 @@ impl<'w> Walker<'w> {
 
         count
     }
+
+    /// Attempts to find `pat` in the remaining part of the `Walker`'s data
+    /// if it succeeds, it returns `true`
+    /// else, it comes back to the original position and returns `false`
+    pub(crate) fn find_string(&mut self, pat: &str) -> bool {
+        if pat.len() > self.remaining() {
+            return false;
+        }
+
+        let initial_pos = self.position();
+
+        let mut found = true;
+
+        for pat_byte in pat.bytes().into_iter() {
+            let byte = match self.next() {
+                None => break,
+                Some(val) => val,
+            };
+
+            if pat_byte != byte {
+                found = false;
+                self.set_position(initial_pos);
+                break;
+            }
+        }
+
+        found
+    }
 }
 
 #[cfg(test)]
@@ -330,5 +373,30 @@ mod tests {
 
         assert!(w.till_not(b'*') == 2);
         assert!(w.next() == Some(b'W'))
+    }
+
+    #[test]
+    fn find_str() {
+        let text = "Osez, osez, le defier!";
+        let pat = "Osez";
+
+        let mut w = Walker::new(text);
+
+        let did_it_find_pattern = w.find_string(pat);
+
+        assert!(did_it_find_pattern, "pattern wasn't found but it should be");
+
+        let leftover = core::str::from_utf8(
+            &w.data()
+                .get(w.position()..)
+                .expect("out of bounds access in `find_string`"),
+        )
+        .expect("invalid utf-8 provided in `find_string`");
+
+        assert!(
+            leftover == ", osez, le defier!",
+            "leftover string was invalid, was: {:#?}",
+            leftover
+        )
     }
 }

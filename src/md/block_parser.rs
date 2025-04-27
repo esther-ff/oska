@@ -143,12 +143,18 @@ impl Lang {
 
 #[derive(Debug)]
 pub struct Heading {
-    level: HeadingLevel,
+    level: Option<HeadingLevel>,
     text: Option<String>,
     id: usize,
 }
 
-#[derive(Debug)]
+impl Heading {
+    pub fn is_level(&self, cmp: u8) -> bool {
+        self.level.is_some_and(|lvl| u8::from(lvl.0) == cmp)
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct HeadingLevel(NonZero<u8>);
 
 #[derive(Debug)]
@@ -157,8 +163,8 @@ pub struct Break {
 }
 
 impl HeadingLevel {
-    fn new(level: u8) -> Self {
-        debug_assert!(level > 0);
+    pub fn new(level: u8) -> Self {
+        debug_assert!(level > 0, "level was lower than 1");
 
         let nonzero = unsafe { NonZero::new_unchecked(level) };
 
@@ -257,11 +263,19 @@ impl Block<Unparsed> {
     }
 
     #[inline]
-    pub fn make_heading(range: impl Into<Option<String>>, level: u8, id: usize) -> Block<Unparsed> {
-        let heading_level = HeadingLevel::new(level);
+    pub fn make_heading(
+        range: impl Into<Option<String>>,
+        heading_level: impl Into<Option<u8>>,
+        id: usize,
+    ) -> Block<Unparsed> {
+        let level = match heading_level.into() {
+            Some(val) => Some(HeadingLevel::new(val)),
+
+            None => None,
+        };
 
         Block::Heading(Heading {
-            level: heading_level,
+            level,
             text: range.into(),
             id,
         })
@@ -846,6 +860,10 @@ impl BlockParser {
 
         self.bullet_list_inner(walker, accum, delim, tight);
     }
+
+    pub fn html_block(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
+        todo!()
+    }
 }
 
 fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
@@ -995,7 +1013,7 @@ mod tests {
                 let text = h.text.expect("no text present in heading");
 
                 assert!(text == "Heading");
-                assert!(u8::from(h.level.0) == 1);
+                assert!(h.level.map_or(false, |x| u8::from(x.0) == 1));
             }
 
             any => panic!("block was not a blockquote, was: {:#?}", any),
@@ -1049,7 +1067,7 @@ mod tests {
 
         match parser.block(&mut walker) {
             Block::Heading(hd) => {
-                assert!(u8::from(hd.level.0) == 1, "wrong heading level");
+                assert!(hd.is_level(1), "wrong heading level");
                 assert!(
                     hd.text.is_some_and(|x| x == "Heading with equals"),
                     "invalid heading text"
@@ -1304,9 +1322,9 @@ mod tests {
         };
 
         assert!(
-            u8::from(block.level.0) == 6,
-            "invalid level found, was supposed to be 6, is {}",
-            block.level.0
+            block.is_level(6),
+            "invalid level found, was supposed to be 6, is {:#?}",
+            block.level
         );
 
         assert!(
@@ -1329,9 +1347,9 @@ mod tests {
         };
 
         assert!(
-            u8::from(block.level.0) == 1,
-            "invalid level found, was supposed to be 1, is {}",
-            block.level.0
+            block.is_level(1),
+            "invalid level found, was supposed to be 1, is {:#?}",
+            block.level
         );
 
         let text = block.text.expect("should be here");
