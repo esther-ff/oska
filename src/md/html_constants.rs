@@ -63,3 +63,25 @@ pub const HTML_ALLOWED_TAGS: [&str; 63] = [
     "track",
     "ul",
 ];
+
+/// First 5 start/end conditions of HTML blocks
+/// in the Commonmark spec
+/// they all lack the starting
+/// `<` due to how the `Walker` handles characters
+pub const SIMPLE_CONDITIONS: [[&str; 2]; 8] = [
+    // cond 1
+    ["pre \t", "/pre>"],
+    ["script \t", "/script>"],
+    ["style \t", "/style>"],
+    ["textarea \t", "/textarea>"],
+    // cond 2
+    ["!--", "-->"],
+    // cond 3
+    ["?", "?>"],
+    // cond 4
+    // treat specically
+    // after the `!` check for any ascii character
+    ["!", ">"],
+    // cond 5
+    ["![CDATA[", "]]>"],
+];

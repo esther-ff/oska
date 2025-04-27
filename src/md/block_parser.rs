@@ -5,10 +5,14 @@ use crate::md::chars::{
     ASTERISK, BACKTICK, DOT, EQUALS, GREATER_THAN, HASH, LINE, NEWLINE, PLUS, RIGHT_PAREN, SPACE,
     TILDE, UNDERSCORE,
 };
+
+use crate::md::html_constants::SIMPLE_CONDITIONS;
 use crate::walker::{StrRange, Walker};
 use core::marker::PhantomData;
 use core::num::NonZero;
 use core::str;
+
+use super::chars::LESSER_THAN;
 
 static BLOCK_VEC_PREALLOCATION: usize = 64;
 
@@ -178,6 +182,12 @@ pub struct Parsed;
 pub struct Unparsed;
 
 #[derive(Debug)]
+pub struct HtmlBlock {
+    inner: String,
+    id: usize,
+}
+
+#[derive(Debug)]
 pub enum Block<State> {
     Paragraph(Paragraph),
     Blockquote(BlkQt),
@@ -186,6 +196,7 @@ pub enum Block<State> {
     IndentedCode(IndentCode),
     Heading(Heading),
     StyleBreak(Break),
+    HtmlBlock(HtmlBlock),
     Eof,
 
     _State(PhantomData<State>),
@@ -285,8 +296,14 @@ impl Block<Unparsed> {
     pub fn make_style_break(id: usize) -> Block<Unparsed> {
         Block::StyleBreak(Break { id })
     }
+
+    #[inline]
+    pub fn make_html_block(inner: String, id: usize) -> Block<Unparsed> {
+        Block::HtmlBlock(HtmlBlock { inner, id })
+    }
 }
 
+#[derive(Debug)]
 pub struct Document<State> {
     blocks: Option<Vec<Block<State>>>,
     _phantom: PhantomData<State>,
@@ -337,6 +354,21 @@ impl BlockParser {
             col: Document::default(),
             id: 0,
         }
+    }
+
+    /// Populates an document with `Block`s
+    /// without parsed inline contents
+    pub fn document(mut self, walker: &mut Walker<'_>) -> Document<Unparsed> {
+        loop {
+            let val = match self.block(walker) {
+                Block::Eof => break,
+                val => val,
+            };
+
+            self.col.add(val);
+        }
+
+        self.col
     }
 
     fn get_new_id(&mut self) -> usize {
@@ -400,6 +432,8 @@ impl BlockParser {
 
             char if is_bullet_list_marker(char) => self.bullet_list(char, walker),
 
+            LESSER_THAN => self.html_block(walker),
+
             _ => self.paragraph(walker),
         }
     }
@@ -423,14 +457,6 @@ impl BlockParser {
                     }
                 }
 
-                // BACKTICK => {
-                //     let amnt_of_backticks = walker.till_not(BACKTICK);
-
-                //     if amnt_of_backticks >= 2 {
-                //         walker.retreat(amnt_of_backticks + 1);
-                //         break;
-                //     }
-                // }
                 _ => {}
             }
         }
@@ -862,7 +888,37 @@ impl BlockParser {
     }
 
     pub fn html_block(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
-        todo!()
+        let initial = walker.position();
+
+        'outer: for (index, cond) in SIMPLE_CONDITIONS.into_iter().enumerate() {
+            if walker.find_string(cond[0]) {
+                // the `!` must be followed by an ascii character
+                if index == 7 {
+                    if !walker.is_next_pred(|x| x.is_ascii_alphabetic()) {
+                        walker.retreat(1);
+                        return self.paragraph(walker);
+                    }
+                }
+
+                let first_char_of_end = cond[1].as_bytes().get(0).expect("must be here");
+
+                'inner: while let Some(char) = walker.next() {
+                    if char == *first_char_of_end {
+                        let result = &cond[1][1..];
+
+                        if walker.find_string(result) {
+                            break 'inner;
+                        }
+                    };
+                }
+
+                break 'outer;
+            }
+        }
+
+        let string = String::from(walker.string_from_offset(initial - 1));
+
+        Block::make_html_block(string, self.get_new_id())
     }
 }
 
@@ -1383,5 +1439,22 @@ mod tests {
 
             _ => panic!("block was not style break"),
         };
+    }
+
+    #[test]
+    fn html_blocks() {
+        let data = concat!(
+            "<pre \t this is some serious content/pre>",
+            "<script \t this is some serious content 2/script>",
+            "<textarea \t this is some serious content/textarea>",
+            "<style \t this is some serious content/style>"
+        );
+
+        let mut walker = Walker::new(data);
+        let mut parser = BlockParser::new();
+
+        let document = parser.document(&mut walker);
+
+        println!("{:#?}", document);
     }
 }
