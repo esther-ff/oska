@@ -440,7 +440,11 @@ impl BlockParser {
 
             LESSER_THAN => self.html_block(walker),
 
-            _ => self.paragraph(walker),
+            any => {
+                dbg!(any);
+
+                self.paragraph(walker)
+            }
         }
     }
 
@@ -483,6 +487,8 @@ impl BlockParser {
         if let Some(" ") = string.get(string.len() - 1..) {
             let _space = string.pop();
         }
+
+        dbg!(&string);
 
         Block::make_paragraph(string, self.get_new_id())
     }
@@ -924,26 +930,39 @@ impl BlockParser {
             }
         }
 
-        if walker.is_next_char(b'/') {
-            walker.advance(1);
-            for tag in HTML_ALLOWED_TAGS {
-                if walker.find_string(tag) {
-                    break;
+        // If the above didn't catch the tag
+        // then we only have the last 2 possible conditions left
+        let skip = usize::from(walker.is_next_char(b'/'));
+        walker.advance(skip);
+        for tag in HTML_ALLOWED_TAGS {
+            if walker.find_string(tag) {
+                while let Some(char) = walker.next() {
+                    dbg!(char);
+                    if is_blank_line(walker) {
+                        let string = String::from(walker.get(initial - 1, walker.position() - 1));
+                        return Block::make_html_block(string, self.get_new_id());
+                    }
                 }
+                break;
             }
+        }
 
-            while let Some(char) = walker.next() {
-                if (char == b'/' && walker.is_next_char(GREATER_THAN))
-                    || walker.is_next_char(GREATER_THAN)
-                {
-                    break;
-                }
+        while let Some(char) = walker.next() {
+            if (char == b'/' && walker.is_next_char(GREATER_THAN))
+                || walker.is_next_char(GREATER_THAN)
+                || is_blank_line(walker)
+                || char == GREATER_THAN
+            {
+                break;
             }
         }
 
         let _ = walker.till(NEWLINE);
 
         let string = String::from(walker.string_from_offset(initial - 1));
+
+        dbg!(&string);
+        dbg!(walker.peek(0));
 
         Block::make_html_block(string, self.get_new_id())
     }
@@ -1047,6 +1066,18 @@ fn is_bullet_list_marker(victim: u8) -> bool {
 //         _ => false,
 //     }
 // }
+
+fn is_blank_line(walker: &mut Walker<'_>) -> bool {
+    let pred = |x| x == NEWLINE;
+    let val = walker.peek(0).is_some_and(pred) && walker.peek(1).is_some_and(pred);
+
+    if val {
+        dbg!("Une grande");
+        walker.advance(2);
+    }
+
+    val
+}
 
 #[cfg(test)]
 mod tests {
@@ -1486,8 +1517,10 @@ mod tests {
             "<? whatever ?>\n",
             "<!block>\n",
             "<![CDATA[ \"L'Alsace et la Lorraine\" ]]>\n",
-            "</address \t>\n",
-            "<vabank"
+            "</address \t>\n\n",
+            "<vabank\n>",
+            "</hr>",
+            "<br>",
         );
 
         let mut walker = Walker::new(data);
