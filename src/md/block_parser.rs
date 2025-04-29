@@ -440,6 +440,11 @@ impl BlockParser {
 
             LESSER_THAN => self.html_block(walker),
 
+            NEWLINE => {
+                walker.advance(1);
+                self.block(walker)
+            }
+
             any => {
                 dbg!(any);
 
@@ -481,8 +486,9 @@ impl BlockParser {
         }
 
         iter.filter(|char| char != &'>')
+            .map(|char| if char == '\0' { '\u{FFFD}' } else { char })
             .map(|char| if char == '\n' { ' ' } else { char })
-            .for_each(|char| String::push(&mut string, char));
+            .for_each(|char| string.push(char));
 
         if let Some(" ") = string.get(string.len() - 1..) {
             let _space = string.pop();
@@ -680,7 +686,7 @@ impl BlockParser {
         while let Some(char) = walker.next() {
             match char {
                 NEWLINE => {
-                    walker.retreat(1);
+                    // walker.advance(1);
                     break;
                 }
 
@@ -903,7 +909,7 @@ impl BlockParser {
 
         for (index, cond) in SIMPLE_CONDITIONS.into_iter().enumerate() {
             if walker.find_string(cond[0]) {
-                // the `!` must be followed by an ascii character
+                // the `!` must be followed by an ascii alphabetic character
                 if index == 7 && !walker.is_next_pred(|x| x.is_ascii_alphabetic()) {
                     walker.retreat(1);
                     return self.paragraph(walker);
@@ -924,8 +930,10 @@ impl BlockParser {
                     }
                 }
 
-                let _ = walker.till(NEWLINE);
-                let string = String::from(walker.get(initial - 1, walker.position() - 1));
+                let _ = walker.till_inclusive(NEWLINE);
+                let string = String::from(walker.get(initial - 1, walker.position()));
+
+                dbg!(&string);
                 return Block::make_html_block(string, self.get_new_id());
             }
         }
@@ -934,15 +942,17 @@ impl BlockParser {
         // then we only have the last 2 possible conditions left
         let skip = usize::from(walker.is_next_char(b'/'));
         walker.advance(skip);
+
         for tag in HTML_ALLOWED_TAGS {
             if walker.find_string(tag) {
                 while let Some(char) = walker.next() {
                     dbg!(char);
                     if is_blank_line(walker) {
-                        let string = String::from(walker.get(initial - 1, walker.position() - 1));
+                        let string = String::from(walker.get(initial - 1, walker.position()));
                         return Block::make_html_block(string, self.get_new_id());
                     }
                 }
+
                 break;
             }
         }
@@ -953,6 +963,7 @@ impl BlockParser {
                 || is_blank_line(walker)
                 || char == GREATER_THAN
             {
+                walker.advance(2);
                 break;
             }
         }
@@ -960,9 +971,6 @@ impl BlockParser {
         let _ = walker.till(NEWLINE);
 
         let string = String::from(walker.string_from_offset(initial - 1));
-
-        dbg!(&string);
-        dbg!(walker.peek(0));
 
         Block::make_html_block(string, self.get_new_id())
     }
@@ -978,12 +986,6 @@ fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
         None => return false,
         Some(val) => val,
     };
-
-    // let cur_part = walker.get(walker.position(), walker.data().len() - 1);
-    // dbg!(cur_part);
-    // let n = &[next];
-    // let cur_char = str::from_utf8(n).unwrap();
-    // dbg!(cur_char);
 
     match next {
         NEWLINE => {
@@ -1018,23 +1020,41 @@ fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
 
         char if char.is_ascii_digit() => {
             walker.advance(1);
-            if is_ordered_list_indicator(walker) {
-                walker.retreat(1);
-                true
-            } else {
-                walker.retreat(1);
-                false
-            }
-        }
-
-        char if is_bullet_list_marker(char) => {
-            walker.advance(1);
-            let bool = walker.is_next_char(SPACE);
-
+            let val = is_ordered_list_indicator(walker);
             walker.retreat(1);
 
-            bool
+            val
         }
+
+        char if is_bullet_list_marker(char) => walker.peek(1) == Some(SPACE),
+
+        LESSER_THAN => {
+            let pos = walker.position();
+            let jump = walker.is_next_char(b'/') as usize;
+            walker.advance(jump);
+
+            if walker
+                .peek(0)
+                // this generally is a pretty bad workaround around the case-insensitiveness
+                // and it isn't even utilised yet
+                // (look at the iterated array)
+                // Some way to do it would be nice
+                // maybe in the walker
+                .is_some_and(|target| matches!(target, b's' | b't' | b'p' | b'S' | b'T' | b'P'))
+            {
+                for pat in ["pre", "script", "style", "textarea"] {
+                    if walker.find_string(pat) {
+                        walker.set_position(pos);
+                        return false;
+                    }
+                }
+            }
+
+            walker.set_position(pos);
+
+            true
+        }
+
         _ => false,
     }
 }
@@ -1043,13 +1063,8 @@ fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
 /// returns true if the 2 next characters are either `. ` or `) `.
 /// does not advance the position of the walker.
 fn is_ordered_list_indicator(walker: &mut Walker<'_>) -> bool {
-    if !walker.is_next_pred(|x: u8| (x == DOT) || (x == RIGHT_PAREN))
-        || walker.peek(1) != Some(SPACE)
-    {
-        return false;
-    }
-
-    true
+    walker.is_next_pred(|val| matches!(val, DOT | RIGHT_PAREN))
+        && walker.peek(1).is_some_and(|char| char == SPACE)
 }
 
 /// Checks if the given character
@@ -1059,22 +1074,15 @@ fn is_bullet_list_marker(victim: u8) -> bool {
     matches!(victim, ASTERISK | LINE | PLUS)
 }
 
-// fn is_useless_char(char: u8) -> bool {
-//     match char {
-//         GREATER_THAN => true,
-
-//         _ => false,
-//     }
-// }
-
+/// Checks if a blank line is present
+/// currently only handles blank lines made by using 2 `\n`s
+///
+/// TODO: make it handle only space or tab lines
 fn is_blank_line(walker: &mut Walker<'_>) -> bool {
     let pred = |x| x == NEWLINE;
     let val = walker.peek(0).is_some_and(pred) && walker.peek(1).is_some_and(pred);
 
-    if val {
-        dbg!("Une grande");
-        walker.advance(2);
-    }
+    walker.advance(val as usize + val as usize);
 
     val
 }
@@ -1518,9 +1526,10 @@ mod tests {
             "<!block>\n",
             "<![CDATA[ \"L'Alsace et la Lorraine\" ]]>\n",
             "</address \t>\n\n",
-            "<vabank\n>",
-            "</hr>",
-            "<br>",
+            "<vabank\n>\n\n",
+            "</hr>\n\n",
+            "<br>\n\n",
+            "Paragraph test\n<!test>"
         );
 
         let mut walker = Walker::new(data);
