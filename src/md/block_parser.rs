@@ -302,7 +302,7 @@ impl Block<Unparsed> {
 
 #[derive(Debug)]
 /// Structure that represents a Markdown document
-/// it has 2 states: `Unparsed` and `Parsed`k
+/// it has 2 states: `Unparsed` and `Parsed`
 /// those relate to the state of inline elements
 /// inside blocks inside of this document
 pub struct Document<State> {
@@ -447,6 +447,8 @@ impl BlockParser {
 
             any => {
                 dbg!(any);
+
+                walker.retreat(1);
 
                 self.paragraph(walker)
             }
@@ -700,7 +702,7 @@ impl BlockParser {
         }
 
         if heading {
-            Self::special_heading(initial - 1, pos - 1, walker, self.get_new_id()).into()
+            Self::special_heading(initial, pos - 1, walker, self.get_new_id()).into()
         } else {
             None
         }
