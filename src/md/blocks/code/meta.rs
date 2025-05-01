@@ -11,9 +11,17 @@ impl CodeMeta {
             lang,
         }
     }
+
+    pub fn lang(&self) -> &Lang {
+        &self.lang
+    }
+
+    pub fn info(&self) -> Option<&String> {
+        self.info.as_ref()
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Clone)]
 pub enum Lang {
     None,
     Rust,
