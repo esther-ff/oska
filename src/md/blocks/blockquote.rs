@@ -19,7 +19,7 @@ impl<State> BlkQt<State> {
     }
 
     pub fn inner(&mut self) -> Option<&mut Block<State>> {
-        self.text.as_mut().map(|x| &mut **x)
+        self.text.as_deref_mut()
     }
 
     pub fn id(&self) -> usize {

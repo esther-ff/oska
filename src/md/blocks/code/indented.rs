@@ -32,11 +32,11 @@ impl IndentCode {
     }
 
     pub fn indents_mut(&mut self) -> &mut [String] {
-        &mut *self.indents
+        &mut self.indents
     }
 
     pub fn indents(&self) -> &[String] {
-        &*self.indents
+        &self.indents
     }
 
     pub fn id(&self) -> usize {

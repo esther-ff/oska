@@ -18,7 +18,7 @@ impl ListItem<Unparsed> {
 
 impl<State> ListItem<State> {
     pub fn inner(&mut self) -> &mut Block<State> {
-        &mut *self.item
+        &mut self.item
     }
 
     pub fn number(&self) -> Option<NonZero<usize>> {
