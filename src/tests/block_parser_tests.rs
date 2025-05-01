@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        block_parser::DefaultParser,
-        md::{Block, blocks::code::meta::Lang},
+        block_parser::{BlockParser, DefaultParser},
+        md::{Block, blocks::code::meta::Lang, blocks::lists::List},
         walker::Walker,
     };
 
@@ -31,13 +31,13 @@ mod tests {
         );
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new();
+        let mut parser = DefaultParser::new();
 
         match parser.block(&mut walker) {
-            Block::Blockquote(bq) => {
-                match *bq.text.expect("no inner element") {
+            Block::Blockquote(mut bq) => {
+                match bq.inner().expect("no inner element") {
                     Block::Paragraph(para) => {
-                        let text = para.text;
+                        let text = para.inner();
                         assert!(
                             "Blockquote BlockquoteNoSpace" == text,
                             "invalid text, was: {text}"
@@ -52,39 +52,39 @@ mod tests {
         };
 
         match parser.block(&mut walker) {
-            Block::Heading(h) => {
-                let text = h.text.expect("no text present in heading");
+            Block::Heading(mut h) => {
+                let text = h.inner().expect("no text present in heading");
 
                 assert!(text == "Heading");
-                assert!(h.level.map_or(false, |x| u8::from(x.0) == 1));
+                assert!(h.level().map_or(false, |x| u8::from(x) == 1));
             }
 
             any => panic!("block was not a blockquote, was: {:#?}", any),
         };
 
         match parser.block(&mut walker) {
-            Block::Paragraph(para) => {
-                assert!(para.text == "#BrokenHeading")
+            Block::Paragraph(mut para) => {
+                assert!(para.inner() == "#BrokenHeading")
             }
 
             any => panic!("block was not a paragraph, was: {:#?}", any),
         }
 
         match parser.block(&mut walker) {
-            Block::FencedCode(code) => {
-                match code.meta.info {
+            Block::FencedCode(mut code) => {
+                match code.meta().info() {
                     Some(info) => assert!("some_meta_data=noumea :3" == info, "invalid meta data"),
                     _ => panic!("no metadata was found"),
                 }
 
-                match code.meta.lang {
-                    super::Lang::Rust => {}
+                match code.meta().lang() {
+                    Lang::Rust => {}
 
                     lang => panic!("invalid language recognised: {lang:#?}"),
                 }
 
                 assert!(
-                    code.text.is_some_and(|str| str == "panic!()\n"),
+                    code.inner().is_some_and(|str| str == "panic!()\n"),
                     "wrongly read code block"
                 )
             }
@@ -94,7 +94,7 @@ mod tests {
 
         match parser.block(&mut walker) {
             Block::IndentedCode(icode) => {
-                let text = icode.indents.get(0).expect("only indent was not present");
+                let text = icode.indents().get(0).expect("only indent was not present");
 
                 assert!(text == "Indented code!");
             }
@@ -109,10 +109,10 @@ mod tests {
         };
 
         match parser.block(&mut walker) {
-            Block::Heading(hd) => {
+            Block::Heading(mut hd) => {
                 assert!(hd.is_level(1), "wrong heading level");
                 assert!(
-                    hd.text.is_some_and(|x| x == "Heading with equals"),
+                    hd.inner().is_some_and(|x| x == "Heading with equals"),
                     "invalid heading text"
                 );
             }
@@ -121,10 +121,10 @@ mod tests {
         }
 
         match parser.block(&mut walker) {
-            Block::Paragraph(para) => assert!(
-                para.text == "and let's have a nice paragraph",
+            Block::Paragraph(mut para) => assert!(
+                para.inner() == "and let's have a nice paragraph",
                 "invalid paragraph text: {0}",
-                para.text
+                para.inner()
             ),
 
             any => panic!("block was not `Paragraph`, was: {:#?}", any),
@@ -132,13 +132,13 @@ mod tests {
 
         match dbg!(parser.block(&mut walker)) {
             Block::List(ord) => match ord {
-                super::List::Ordered(order) => {
-                    let items = order.items.into_iter();
+                List::Ordered(mut order) => {
+                    let items = order.items_mut().into_iter();
 
                     items.for_each(|item| {
-                        match *item.item {
+                        match item.inner() {
                             Block::Paragraph(parap) => {
-                                println!("text:\n{:#?}", parap.text)
+                                println!("text:\n{:#?}", parap.inner())
                             }
 
                             _ => panic!("was not paragraph"),
@@ -154,10 +154,10 @@ mod tests {
 
         match parser.block(&mut walker) {
             Block::List(ls) => match ls {
-                super::List::Bullet(b) => {
-                    b.items.into_iter().for_each(|x| {
-                        let string = match *x.item {
-                            Block::Paragraph(p) => p.text,
+                List::Bullet(mut b) => {
+                    b.items_mut().into_iter().for_each(|x| {
+                        let string = match x.inner() {
+                            Block::Paragraph(p) => p.inner(),
 
                             any => panic!("not paragraph, is: {any:#?}"),
                         };
@@ -186,42 +186,42 @@ mod tests {
             ">>>> This is an another blockquote\nbut a longer one!",
         );
 
-        let mut parser = BlockParser::new();
+        let mut parser = DefaultParser::new();
         let mut walker = Walker::new(md);
 
-        let val = parser.block(&mut walker);
+        match parser.block(&mut walker) {
+            Block::Blockquote(mut q) => {
+                let mut para = q.inner().expect("field not present");
 
-        let inner = match val {
-            Block::Blockquote(q) => *q.text.expect("field not present"),
+                match &mut para {
+                    Block::Paragraph(para) => {
+                        let text = para.inner();
+
+                        assert!(text == "This is a blockquote");
+                    }
+
+                    _ => assert!(false, "block was not paragraph"),
+                }
+            }
             _ => panic!("block was not blockquote"),
         };
 
-        match inner {
-            Block::Paragraph(para) => {
-                let text = para.text;
+        match parser.block(&mut walker) {
+            Block::Blockquote(mut q) => {
+                let mut para = q.inner().expect("field not present");
 
-                assert!(text == "This is a blockquote");
+                match &mut para {
+                    Block::Paragraph(para) => {
+                        let text = para.inner();
+
+                        assert!(text == "This is an another blockquote but a longer one!");
+                    }
+
+                    _ => assert!(false, "block was not paragraph"),
+                }
             }
-
-            _ => assert!(false, "block was not paragraph"),
-        }
-
-        let val = parser.block(&mut walker);
-
-        let inner = match val {
-            Block::Blockquote(q) => *q.text.expect("field not present"),
             _ => panic!("block was not blockquote"),
         };
-
-        match inner {
-            Block::Paragraph(para) => {
-                let text = para.text;
-
-                assert!(text == "This is an another blockquote but a longer one!");
-            }
-
-            _ => assert!(false, "block was not paragraph"),
-        }
     }
 
     #[test]
@@ -234,17 +234,17 @@ mod tests {
         );
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new();
+        let mut parser = DefaultParser::new();
 
         match dbg!(parser.block(&mut walker)) {
             Block::List(ord) => match ord {
-                super::List::Ordered(order) => {
-                    let items = order.items.into_iter();
+                List::Ordered(mut order) => {
+                    let items = order.items_mut().into_iter();
 
                     items.for_each(|item| {
-                        match *item.item {
+                        match item.inner() {
                             Block::Paragraph(parap) => {
-                                println!("text:\n{:#?}", parap.text)
+                                println!("text:\n{:#?}", parap.inner())
                             }
 
                             _ => panic!("was not paragraph"),
@@ -264,14 +264,14 @@ mod tests {
         let data = concat!("+ Meow\n", "+ Awrff\n", "+ Bark\n");
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new();
+        let mut parser = DefaultParser::new();
 
         match parser.block(&mut walker) {
             Block::List(ls) => match ls {
-                super::List::Bullet(b) => {
-                    b.items.into_iter().for_each(|x| {
-                        let string = match *x.item {
-                            Block::Paragraph(p) => p.text,
+                List::Bullet(mut b) => {
+                    b.items_mut().into_iter().for_each(|x| {
+                        let string = match x.inner() {
+                            Block::Paragraph(p) => p.inner(),
 
                             _ => panic!("not paragraph"),
                         };
@@ -292,15 +292,15 @@ mod tests {
         let data = concat!("```rust\n", "#[no_std]\n", "```");
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new();
+        let mut parser = DefaultParser::new();
 
-        let block = match parser.block(&mut walker) {
+        let mut block = match parser.block(&mut walker) {
             Block::FencedCode(fc) => fc,
 
             _ => panic!("block was not fenced code"),
         };
 
-        assert!(block.text.expect("text should be here") == "#[no_std]\n");
+        assert!(block.inner().expect("text should be here") == "#[no_std]\n");
     }
 
     #[test]
@@ -308,15 +308,15 @@ mod tests {
         let data = concat!("~~~rust\n", "#[no_std]\n", "~~~");
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new();
+        let mut parser = DefaultParser::new();
 
-        let block = match parser.block(&mut walker) {
+        let mut block = match parser.block(&mut walker) {
             Block::FencedCode(fc) => fc,
 
             _ => panic!("block was not fenced code"),
         };
 
-        assert!(block.text.expect("text should be here") == "#[no_std]\n");
+        assert!(block.inner().expect("text should be here") == "#[no_std]\n");
     }
 
     #[test]
@@ -330,7 +330,7 @@ mod tests {
         );
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new();
+        let mut parser = DefaultParser::new();
 
         let block = parser.block(&mut walker);
 
@@ -340,14 +340,14 @@ mod tests {
         };
 
         inner
-            .indents
+            .indents()
             .into_iter()
             .enumerate()
             .map(|(index, val)| (index + 1, val))
             .for_each(|(index, value)| {
                 let test = format!("code line {}", index);
 
-                assert!(test == value, "wrong value at line: {}", index)
+                assert!(&test == value, "wrong value at line: {}", index)
             });
     }
 
@@ -356,9 +356,9 @@ mod tests {
         let data = "###### une, grande, et indivisible";
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new();
+        let mut parser = DefaultParser::new();
 
-        let block = match parser.block(&mut walker) {
+        let mut block = match parser.block(&mut walker) {
             Block::Heading(h) => h,
 
             _ => panic!("block was not a heading"),
@@ -367,11 +367,11 @@ mod tests {
         assert!(
             block.is_level(6),
             "invalid level found, was supposed to be 6, is {:#?}",
-            block.level
+            block.level()
         );
 
         assert!(
-            block.text.expect("should be here") == "une, grande, et indivisible",
+            block.inner().expect("should be here") == "une, grande, et indivisible",
             "invalid text in heading"
         );
     }
@@ -381,9 +381,9 @@ mod tests {
         let data = concat!("Heading text\n", "======",);
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new();
+        let mut parser = DefaultParser::new();
 
-        let block = match parser.block(&mut walker) {
+        let mut block = match parser.block(&mut walker) {
             Block::Heading(h) => h,
 
             _ => panic!("block was not a heading"),
@@ -392,10 +392,10 @@ mod tests {
         assert!(
             block.is_level(1),
             "invalid level found, was supposed to be 1, is {:#?}",
-            block.level
+            block.level()
         );
 
-        let text = block.text.expect("should be here");
+        let text = block.inner().expect("should be here");
         assert!(
             text == "Heading text",
             "invalid text in heading, was: {text:?}"
@@ -407,7 +407,7 @@ mod tests {
         let data = concat!("___\n", "---\n", "***\n");
 
         let mut walker = Walker::new(data);
-        let mut parser = BlockParser::new();
+        let mut parser = DefaultParser::new();
 
         match parser.block(&mut walker) {
             Block::StyleBreak(_) => {}
@@ -447,10 +447,22 @@ mod tests {
         );
 
         let mut walker = Walker::new(data);
-        let parser = BlockParser::new();
+        let parser = DefaultParser::new();
 
         let document = parser.document(&mut walker);
 
         println!("{:#?}", document);
+    }
+
+    #[test]
+    fn nested() {
+        let data = concat!("> 1. First list entry\n> 2. Second list entry\n 3. Third list entry");
+
+        let p = DefaultParser::new();
+        let mut w = Walker::new(data);
+
+        let doc = p.document(&mut w);
+
+        println!("{:#?}", doc);
     }
 }
