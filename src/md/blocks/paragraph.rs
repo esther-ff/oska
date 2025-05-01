@@ -49,21 +49,24 @@ pub fn paragraph(parser: &mut impl BlockParser, walker: &mut Walker<'_>) -> Bloc
     }
 
     let mut string = String::with_capacity(walker.position() - initial);
-    let mut iter = walker.get(initial, walker.position()).chars();
+    let iter = walker.get(initial, walker.position()).chars();
 
-    if let Some(char) = iter.next() {
-        if char != ' ' {
-            string.push(char);
-        }
-    }
+    // if let Some(char) = iter.next() {
+    //     if char != ' ' {
+    //         string.push(char);
+    //     }
+    // }
 
-    iter.filter(|char| char != &'>')
-        .map(|char| if char == '\0' { '\u{FFFD}' } else { char })
-        .map(|char| if char == '\n' { ' ' } else { char })
+    iter.filter(|char| *char != '>')
+        .map(|val| match val {
+            '\0' => '\u{FFFD}',
+            '\n' => ' ',
+            any => any,
+        })
         .for_each(|char| string.push(char));
 
-    if let Some(" ") = string.get(string.len() - 1..) {
-        let _space = string.pop();
+    if string.get(string.len() - 1..).is_some_and(|x| x == " ") {
+        let _ = string.pop();
     }
 
     dbg!(&string);

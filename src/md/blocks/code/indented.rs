@@ -51,7 +51,6 @@ pub fn indented_code(
     let amnt_of_spaces = walker.till_not(SPACE);
 
     if amnt_of_spaces < 3 {
-        walker.retreat(amnt_of_spaces);
         return None;
     }
 

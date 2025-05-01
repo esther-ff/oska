@@ -1,9 +1,11 @@
 use crate::md::{
     block_parser::BlockParser,
-    blocks::lists::list_item::ListItem,
-    blocks::paragraph::paragraph,
-    blocks::utils::{check_for_possible_new_block, is_ordered_list_indicator},
-    blocks::{Block, Parsed, Unparsed},
+    blocks::{
+        Block, Unparsed,
+        lists::list_item::ListItem,
+        paragraph::paragraph,
+        utils::{check_for_possible_new_block, is_ordered_list_indicator},
+    },
     chars::NEWLINE,
     walker::Walker,
 };
@@ -66,6 +68,7 @@ impl OListConstructor {
 
     pub fn push_item(&mut self, item: Block<Unparsed>) {
         self.num += 1;
+
         // Safety:
         //
         // Valid lists start from minimally the number 0
@@ -88,37 +91,39 @@ pub fn ordered_list(
 ) -> Block<Unparsed> {
     if !is_ordered_list_indicator(walker) {
         walker.retreat(1);
-
         return paragraph(parser, walker);
+    } else {
+        walker.advance(1);
     }
-
-    walker.advance(1);
 
     let initial = walker.position();
     while let Some(char) = walker.next() {
-        if char == NEWLINE && check_for_possible_new_block(walker) {
-            break;
-        }
-
-        if char == NEWLINE && walker.is_next_pred(|x| x.is_ascii_digit()) {
-            walker.advance(1);
-            if is_ordered_list_indicator(walker) {
+        if char == NEWLINE {
+            if check_for_possible_new_block(walker) {
                 break;
+            } else if walker.is_next_pred(|x| x.is_ascii_digit()) {
+                walker.advance(1);
+                if is_ordered_list_indicator(walker) {
+                    break;
+                }
             }
+        } else if check_for_possible_new_block(walker) {
+            break;
         }
     }
 
     let mut new_walker = walker.walker_from_initial(initial);
     let block = parser.block(&mut new_walker);
-
     let mut construct = OListConstructor::new(start - 1);
     let mut tight = true;
-    construct.push_item(block);
 
+    construct.push_item(block);
     walker.advance(1);
 
+    dbg!(walker.peek(0));
     ordered_list_inner(parser, walker, &mut construct, &mut tight);
 
+    dbg!(walker.peek(0));
     construct.finish(parser.get_new_id(), tight)
 }
 
@@ -129,11 +134,14 @@ fn ordered_list_inner(
     tightness: &mut bool,
 ) {
     if !is_ordered_list_indicator(walker) {
+        dbg!(walker.peek(0));
+        println!("MEEEOW");
         walker.retreat(1);
         return;
     }
 
     let initial = walker.position();
+
     while let Some(char) = walker.next() {
         if char == NEWLINE {
             if check_for_possible_new_block(walker) {
@@ -144,19 +152,15 @@ fn ordered_list_inner(
                 *tightness = false;
                 walker.advance(1);
             }
+        }
 
-            walker.advance(1);
-            if is_ordered_list_indicator(walker) {
-                break;
-            }
-
-            walker.retreat(1);
+        if is_ordered_list_indicator(walker) {
+            break;
         }
     }
 
     let mut new_walker = walker.walker_from_initial(initial + 1);
-    let block = parser.block(&mut new_walker);
-    accum.push_item(block);
+    accum.push_item(parser.block(&mut new_walker));
 
     walker.advance(1);
 

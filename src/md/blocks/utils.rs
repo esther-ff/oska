@@ -46,9 +46,17 @@ pub(crate) fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
         }
 
         char if char.is_ascii_digit() => {
-            walker.advance(1);
+            let pos = walker.position();
+
+            while let Some(char) = walker.peek(0) {
+                if char.is_ascii_digit() {
+                    walker.advance(1);
+                } else {
+                    break;
+                }
+            }
             let val = is_ordered_list_indicator(walker);
-            walker.retreat(1);
+            walker.set_position(pos);
 
             val
         }
