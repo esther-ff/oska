@@ -1,12 +1,42 @@
 use super::{Block, Parsed, Unparsed};
-use crate::md::chars::{GREATER_THAN, NEWLINE};
-use crate::md::walker::Walker;
+use crate::md::{
+    BlockParser,
+    blocks::utils::check_for_possible_new_block,
+    chars::{GREATER_THAN, NEWLINE, SPACE},
+    walker::Walker,
+};
 
 #[derive(Debug)]
-pub struct BlkQt {
+pub struct BlkQt<State> {
     level: BlkQtLevel,
-    text: Option<Box<Block<Unparsed>>>,
+    text: Option<Box<Block<State>>>,
     id: usize,
+}
+
+impl<State> BlkQt<State> {
+    pub fn level(&self) -> usize {
+        self.level.0
+    }
+
+    pub fn inner(&mut self) -> Option<&mut Block<State>> {
+        self.text.as_mut().map(|x| &mut **x)
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+}
+
+pub fn make_blockquote<A: Into<Option<Block<Unparsed>>>>(
+    text: A,
+    id: usize,
+    level: usize,
+) -> BlkQt<Unparsed> {
+    BlkQt {
+        level: BlkQtLevel::new(level),
+        text: text.into().map(Box::new),
+        id,
+    }
 }
 
 #[derive(Debug)]
@@ -18,8 +48,8 @@ impl BlkQtLevel {
     }
 }
 
-pub fn blockquote(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
-    let id = self.get_new_id();
+pub fn blockquote(parser: &mut impl BlockParser, walker: &mut Walker<'_>) -> Block<Unparsed> {
+    let id = parser.get_new_id();
     let level = walker.till_not(GREATER_THAN);
     let initial = walker.position();
 
@@ -48,7 +78,7 @@ pub fn blockquote(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
     }
     let mut new_walker = walker.walker_from_initial(initial);
 
-    let inner = match self.block(&mut new_walker) {
+    let inner = match parser.block(&mut new_walker) {
         Block::Eof => None,
 
         val => Some(val),

@@ -16,10 +16,17 @@ pub struct Parsed;
 pub struct Unparsed;
 
 use blockquote::{BlkQt, BlkQtLevel};
-use code::{fenced::Code, indented::IndentCode};
+use code::{
+    fenced::Code,
+    indented::IndentCode,
+    meta::{CodeMeta, Lang},
+};
 use heading::{Heading, HeadingLevel};
 use html_block::*;
-use lists::{bullet_list::BulletList, ordered_list::OrderedList};
+use lists::{
+    bullet_list::{self, BulletList},
+    ordered_list::OrderedList,
+};
 use paragraph::Paragraph;
 use style_break::Break;
 
@@ -28,8 +35,8 @@ use style_break::Break;
 #[derive(Debug)]
 pub enum Block<State> {
     Paragraph(paragraph::Paragraph),
-    Blockquote(blockquote::BlkQt),
-    List(lists::List),
+    Blockquote(blockquote::BlkQt<State>),
+    List(lists::List<State>),
     FencedCode(code::fenced::Code),
     IndentedCode(code::indented::IndentCode),
     Heading(heading::Heading),
@@ -43,7 +50,7 @@ pub enum Block<State> {
 impl Block<Unparsed> {
     #[inline]
     pub fn make_paragraph(text: String, id: usize) -> Block<Unparsed> {
-        Block::Paragraph(Paragraph { text, id })
+        Block::Paragraph(paragraph::make_paragraph(text, id))
     }
 
     #[inline]
@@ -52,58 +59,49 @@ impl Block<Unparsed> {
         id: usize,
         level: usize,
     ) -> Block<Unparsed> {
-        Block::Blockquote(BlkQt {
-            level: BlkQtLevel::new(level),
-            text: range.into().map(Box::new),
-            id,
-        })
+        Block::Blockquote(blockquote::make_blockquote(range, level, id))
     }
 
     #[inline]
     pub fn make_ordered_list(
         start_number: usize,
-        items: Vec<ListItem>,
+        items: Vec<lists::list_item::ListItem<Unparsed>>,
         tight: bool,
         id: usize,
     ) -> Block<Unparsed> {
-        Block::List(List::Ordered(OrderedList {
+        Block::List(lists::List::Ordered(OrderedList::new(
             tight,
             start_number,
             items,
             id,
-        }))
+        )))
     }
 
     #[inline]
-    pub fn make_bullet_list(items: Vec<ListItem>, tight: bool, id: usize) -> Block<Unparsed> {
-        Block::List(List::Bullet(BulletList { tight, items, id }))
+    pub fn make_bullet_list(
+        items: Vec<lists::list_item::ListItem<Unparsed>>,
+        tight: bool,
+        id: usize,
+    ) -> Block<Unparsed> {
+        Block::List(lists::List::Bullet(bullet_list::make_bullet_list(
+            items, tight, id,
+        )))
     }
 
     #[inline]
     pub fn make_code(
         code: impl Into<Option<String>>,
-        meta: impl Into<Option<String>>,
+        metadata: impl Into<Option<String>>,
         lang: Lang,
         id: usize,
     ) -> Block<Unparsed> {
-        let meta = CodeMeta {
-            lang,
-            info: meta.into(),
-        };
-
-        Block::FencedCode(Code {
-            meta,
-            text: code.into(),
-            id,
-        })
+        let meta = CodeMeta::new(lang, metadata);
+        Block::FencedCode(Code::new(meta, code, id))
     }
 
     #[inline]
-    pub fn make_indented_code<T: Into<Box<[String]>>>(indents: T, id: usize) -> Block<Unparsed> {
-        Block::IndentedCode(IndentCode {
-            indents: indents.into(),
-            id,
-        })
+    pub fn make_indented_code(indents: Vec<String>, id: usize) -> Block<Unparsed> {
+        Block::IndentedCode(IndentCode::new(indents, id))
     }
 
     #[inline]
@@ -112,20 +110,20 @@ impl Block<Unparsed> {
         heading_level: impl Into<Option<u8>>,
         id: usize,
     ) -> Block<Unparsed> {
-        Block::Heading(Heading {
-            level: heading_level.into().map(HeadingLevel::new),
-            text: range.into(),
+        Block::Heading(Heading::new(
+            heading_level.into().map(HeadingLevel::new),
+            range,
             id,
-        })
+        ))
     }
 
     #[inline]
     pub fn make_style_break(id: usize) -> Block<Unparsed> {
-        Block::StyleBreak(Break { id })
+        Block::StyleBreak(Break::new(id))
     }
 
     #[inline]
     pub fn make_html_block(inner: String, id: usize) -> Block<Unparsed> {
-        Block::HtmlBlock(HtmlBlock { inner, id })
+        Block::HtmlBlock(HtmlBlock::new(inner, id))
     }
 }

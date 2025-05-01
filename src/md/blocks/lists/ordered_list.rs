@@ -1,13 +1,56 @@
+use crate::md::{
+    block_parser::BlockParser,
+    blocks::lists::list_item::ListItem,
+    blocks::paragraph::paragraph,
+    blocks::utils::{check_for_possible_new_block, is_ordered_list_indicator},
+    blocks::{Block, Parsed, Unparsed},
+    chars::NEWLINE,
+    walker::Walker,
+};
+
+use core::num::NonZero;
+
 #[derive(Debug)]
-pub struct OrderedList {
+pub struct OrderedList<State> {
     tight: bool,
     start_number: usize,
-    items: Vec<ListItem>,
+    items: Vec<ListItem<State>>,
     id: usize,
 }
 
+impl<State> OrderedList<State> {
+    pub fn new(tight: bool, start_number: usize, items: Vec<ListItem<State>>, id: usize) -> Self {
+        Self {
+            tight,
+            start_number,
+            items,
+            id,
+        }
+    }
+
+    pub fn is_tight(&self) -> bool {
+        self.tight
+    }
+
+    pub fn start_number(&self) -> usize {
+        self.start_number
+    }
+
+    pub fn items_mut(&mut self) -> &mut Vec<ListItem<State>> {
+        &mut self.items
+    }
+
+    pub fn items(&self) -> &[ListItem<State>] {
+        &self.items
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+}
+
 struct OListConstructor {
-    items: Vec<ListItem>,
+    items: Vec<ListItem<Unparsed>>,
     num: usize,
     cache: usize,
 }
@@ -30,12 +73,7 @@ impl OListConstructor {
         // which means the number at least will be 1
         // so it qualifies for `NonZero<usize>`
         let number: Option<NonZero<usize>> = unsafe { NonZero::new_unchecked(self.num) }.into();
-        let list_item = ListItem {
-            item: Box::new(item),
-            number,
-        };
-
-        self.items.push(list_item);
+        self.items.push(ListItem::new(number, item));
     }
 
     pub fn finish(self, id: usize, tight: bool) -> Block<Unparsed> {
@@ -43,11 +81,15 @@ impl OListConstructor {
     }
 }
 
-pub fn ordered_list(&mut self, start: usize, walker: &mut Walker<'_>) -> Block<Unparsed> {
+pub fn ordered_list(
+    parser: &mut impl BlockParser,
+    start: usize,
+    walker: &mut Walker<'_>,
+) -> Block<Unparsed> {
     if !is_ordered_list_indicator(walker) {
         walker.retreat(1);
 
-        return self.paragraph(walker);
+        return paragraph(parser, walker);
     }
 
     walker.advance(1);
@@ -67,7 +109,7 @@ pub fn ordered_list(&mut self, start: usize, walker: &mut Walker<'_>) -> Block<U
     }
 
     let mut new_walker = walker.walker_from_initial(initial);
-    let block = self.block(&mut new_walker);
+    let block = parser.block(&mut new_walker);
 
     let mut construct = OListConstructor::new(start - 1);
     let mut tight = true;
@@ -75,13 +117,13 @@ pub fn ordered_list(&mut self, start: usize, walker: &mut Walker<'_>) -> Block<U
 
     walker.advance(1);
 
-    self.ordered_list_inner(walker, &mut construct, &mut tight);
+    ordered_list_inner(parser, walker, &mut construct, &mut tight);
 
-    construct.finish(self.get_new_id(), tight)
+    construct.finish(parser.get_new_id(), tight)
 }
 
 fn ordered_list_inner(
-    &mut self,
+    parser: &mut impl BlockParser,
     walker: &mut Walker<'_>,
     accum: &mut OListConstructor,
     tightness: &mut bool,
@@ -113,10 +155,10 @@ fn ordered_list_inner(
     }
 
     let mut new_walker = walker.walker_from_initial(initial + 1);
-    let block = self.block(&mut new_walker);
+    let block = parser.block(&mut new_walker);
     accum.push_item(block);
 
     walker.advance(1);
 
-    self.ordered_list_inner(walker, accum, tightness);
+    ordered_list_inner(parser, walker, accum, tightness);
 }

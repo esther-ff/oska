@@ -1,4 +1,5 @@
 use super::{Block, Parsed, Unparsed};
+use crate::md::BlockParser;
 use crate::md::chars::{ASTERISK, LINE, NEWLINE, UNDERSCORE};
 use crate::md::walker::Walker;
 
@@ -7,7 +8,20 @@ pub struct Break {
     id: usize,
 }
 
-pub fn style_break(&mut self, walker: &mut Walker<'_>) -> Option<Block<Unparsed>> {
+impl Break {
+    pub fn new(id: usize) -> Self {
+        Self { id }
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+}
+
+pub fn style_break(
+    parser: &mut impl BlockParser,
+    walker: &mut Walker<'_>,
+) -> Option<Block<Unparsed>> {
     let initial = walker.position();
 
     let pred = |x| (x == ASTERISK) | (x == LINE) | (x == UNDERSCORE);
@@ -35,5 +49,5 @@ pub fn style_break(&mut self, walker: &mut Walker<'_>) -> Option<Block<Unparsed>
         }
     }
 
-    Block::make_style_break(self.get_new_id()).into()
+    Block::make_style_break(parser.get_new_id()).into()
 }

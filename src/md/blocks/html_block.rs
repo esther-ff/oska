@@ -1,15 +1,34 @@
+use super::{Block, Parsed, Unparsed};
+
+use crate::md::{
+    BlockParser,
+    blocks::{paragraph::paragraph, utils::is_blank_line},
+    chars::{GREATER_THAN, NEWLINE},
+    html_constants::{HTML_ALLOWED_TAGS, SIMPLE_CONDITIONS},
+    walker::Walker,
+};
+
 #[derive(Debug)]
 pub struct HtmlBlock {
     inner: String,
     id: usize,
 }
 
-use super::Block;
-use crate::md::chars::NEWLINE;
-use crate::md::html_constants::{HTML_ALLOWED_TAGS, SIMPLE_CONDITIONS};
-use crate::md::walker::Walker;
+impl HtmlBlock {
+    pub fn new(inner: String, id: usize) -> Self {
+        Self { inner, id }
+    }
 
-pub fn html_block(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
+    pub fn inner(&mut self) -> &mut String {
+        &mut self.inner
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+}
+
+pub fn html_block(parser: &mut impl BlockParser, walker: &mut Walker<'_>) -> Block<Unparsed> {
     let initial = walker.position();
 
     for (index, cond) in SIMPLE_CONDITIONS.into_iter().enumerate() {
@@ -17,7 +36,7 @@ pub fn html_block(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
             // the `!` must be followed by an ascii alphabetic character
             if index == 7 && !walker.is_next_pred(|x| x.is_ascii_alphabetic()) {
                 walker.retreat(1);
-                return self.paragraph(walker);
+                return paragraph(parser, walker);
             }
 
             let first_char_of_end = cond[1]
@@ -39,7 +58,7 @@ pub fn html_block(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
             let string = String::from(walker.get(initial - 1, walker.position()));
 
             dbg!(&string);
-            return Block::make_html_block(string, self.get_new_id());
+            return Block::make_html_block(string, parser.get_new_id());
         }
     }
 
@@ -54,7 +73,7 @@ pub fn html_block(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
                 dbg!(char);
                 if is_blank_line(walker) {
                     let string = String::from(walker.get(initial - 1, walker.position()));
-                    return Block::make_html_block(string, self.get_new_id());
+                    return Block::make_html_block(string, parser.get_new_id());
                 }
             }
 
@@ -77,5 +96,5 @@ pub fn html_block(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
 
     let string = String::from(walker.string_from_offset(initial - 1));
 
-    Block::make_html_block(string, self.get_new_id())
+    Block::make_html_block(string, parser.get_new_id())
 }

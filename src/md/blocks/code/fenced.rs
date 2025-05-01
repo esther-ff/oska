@@ -1,6 +1,11 @@
-use super::meta::CodeMeta;
-use crate::md::chars::{BACKTICK, TILDE};
-use crate::md::walker::Walker;
+use super::meta::{CodeMeta, Lang};
+
+use crate::md::{
+    BlockParser,
+    blocks::{Block, Parsed, Unparsed, paragraph::paragraph},
+    chars::{BACKTICK, NEWLINE, TILDE},
+    walker::{StrRange, Walker},
+};
 
 #[derive(Debug)]
 pub struct Code {
@@ -9,7 +14,32 @@ pub struct Code {
     id: usize,
 }
 
-pub fn fenced_code<const CHAR: u8>(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
+impl Code {
+    pub fn new<A: Into<Option<String>>>(meta: CodeMeta, text: A, id: usize) -> Self {
+        Self {
+            meta,
+            text: text.into(),
+            id,
+        }
+    }
+
+    pub fn meta(&self) -> &CodeMeta {
+        &self.meta
+    }
+
+    pub fn inner(&mut self) -> Option<&mut String> {
+        self.text.as_mut()
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+}
+
+pub fn fenced_code<const CHAR: u8>(
+    parser: &mut impl BlockParser,
+    walker: &mut Walker<'_>,
+) -> Block<Unparsed> {
     debug_assert!(
         CHAR == TILDE || CHAR == BACKTICK,
         "invalid char provided to the `code` function"
@@ -19,7 +49,7 @@ pub fn fenced_code<const CHAR: u8>(&mut self, walker: &mut Walker<'_>) -> Block<
 
     if amnt_of_backticks < 2 {
         walker.retreat(amnt_of_backticks + 1);
-        return self.paragraph(walker);
+        return paragraph(parser, walker);
     }
 
     let pos = walker.position();
@@ -29,7 +59,7 @@ pub fn fenced_code<const CHAR: u8>(&mut self, walker: &mut Walker<'_>) -> Block<
     while let Some(char) = walker.next() {
         if char == CHAR {
             walker.set_position(pos);
-            return self.paragraph(walker);
+            return paragraph(parser, walker);
         }
 
         if char == NEWLINE {
@@ -65,5 +95,5 @@ pub fn fenced_code<const CHAR: u8>(&mut self, walker: &mut Walker<'_>) -> Block<
 
     let string = String::from(walker.get(code_start, code_end));
 
-    Block::make_code(string, info, lang, self.get_new_id())
+    Block::make_code(string, info, lang, parser.get_new_id())
 }

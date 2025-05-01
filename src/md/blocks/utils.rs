@@ -1,4 +1,6 @@
-use crate::md::chars::{BACKTICK, GREATHER_THAN, HASH, LESSER_THAN, NEWLINE, SPACE};
+use crate::md::chars::{
+    ASTERISK, BACKTICK, DOT, HASH, LESSER_THAN, LINE, NEWLINE, PLUS, RIGHT_PAREN, SPACE,
+};
 use crate::md::walker::Walker;
 
 /// Checks for a the possibility of a new block
@@ -6,7 +8,7 @@ use crate::md::walker::Walker;
 /// if it returns false, the state of the parser
 /// is the same as it was before the call
 /// if it is true, the state may or may not be different
-fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
+pub(crate) fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
     let next = match walker.peek(0) {
         None => return false,
         Some(val) => val,
@@ -87,7 +89,7 @@ fn check_for_possible_new_block(walker: &mut Walker<'_>) -> bool {
 /// Used after a numeric character
 /// returns true if the 2 next characters are either `. ` or `) `.
 /// does not advance the position of the walker.
-fn is_ordered_list_indicator(walker: &mut Walker<'_>) -> bool {
+pub(crate) fn is_ordered_list_indicator(walker: &mut Walker<'_>) -> bool {
     walker.is_next_pred(|val| matches!(val, DOT | RIGHT_PAREN))
         && walker.peek(1).is_some_and(|char| char == SPACE)
 }
@@ -95,7 +97,7 @@ fn is_ordered_list_indicator(walker: &mut Walker<'_>) -> bool {
 /// Checks if the given character
 /// can be a bullet list marker
 /// (means: `+` or `-` or `*`)
-fn is_bullet_list_marker(victim: u8) -> bool {
+pub(crate) fn is_bullet_list_marker(victim: u8) -> bool {
     matches!(victim, ASTERISK | LINE | PLUS)
 }
 
@@ -103,7 +105,7 @@ fn is_bullet_list_marker(victim: u8) -> bool {
 /// currently only handles blank lines made by using 2 `\n`s
 ///
 /// TODO: make it handle only space or tab lines
-fn is_blank_line(walker: &mut Walker<'_>) -> bool {
+pub(crate) fn is_blank_line(walker: &mut Walker<'_>) -> bool {
     let pred = |x| x == NEWLINE;
     let val = walker.peek(0).is_some_and(pred) && walker.peek(1).is_some_and(pred);
 

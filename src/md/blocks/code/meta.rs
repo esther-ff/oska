@@ -4,6 +4,15 @@ pub struct CodeMeta {
     info: Option<String>,
 }
 
+impl CodeMeta {
+    pub fn new<A: Into<Option<String>>>(lang: Lang, info: A) -> Self {
+        Self {
+            info: info.into(),
+            lang,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Lang {
     None,

@@ -2,13 +2,30 @@ use super::{Block, Parsed, Unparsed};
 use crate::md::chars::{EQUALS, NEWLINE};
 use crate::md::walker::Walker;
 
+use crate::md::BlockParser;
+use crate::md::blocks::{heading::handle_special_heading, utils::check_for_possible_new_block};
+
 #[derive(Debug)]
 pub struct Paragraph {
     text: String,
     id: usize,
 }
 
-pub fn paragraph(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
+impl Paragraph {
+    pub fn inner(&mut self) -> &mut String {
+        &mut self.text
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+}
+
+pub fn make_paragraph(text: String, id: usize) -> Paragraph {
+    Paragraph { text, id }
+}
+
+pub fn paragraph(parser: &mut impl BlockParser, walker: &mut Walker<'_>) -> Block<Unparsed> {
     let initial = walker.position();
 
     while let Some(char) = walker.next() {
@@ -17,7 +34,7 @@ pub fn paragraph(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
 
             NEWLINE => {
                 if walker.is_next_char(EQUALS) {
-                    if let Some(block) = self.handle_special_heading(walker, initial) {
+                    if let Some(block) = handle_special_heading(parser, walker, initial) {
                         return block;
                     }
                 }
@@ -51,5 +68,5 @@ pub fn paragraph(&mut self, walker: &mut Walker<'_>) -> Block<Unparsed> {
 
     dbg!(&string);
 
-    Block::make_paragraph(string, self.get_new_id())
+    Block::make_paragraph(string, parser.get_new_id())
 }
