@@ -44,6 +44,12 @@ impl Inlines {
     }
 }
 
+impl Default for Inlines {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug)]
 pub enum Inline {
     Emph(Emphasis),
@@ -124,13 +130,13 @@ pub struct Emphasis {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Copy, Clone)]
-pub(crate) enum EmphasisChar {
+pub enum EmphasisChar {
     Asterisk = 0,
     Underscore = 1,
 }
 
 impl EmphasisChar {
-    pub(crate) fn from_u8(val: u8) -> Option<EmphasisChar> {
+    pub fn from_u8(val: u8) -> Option<EmphasisChar> {
         match val {
             b'*' => Some(EmphasisChar::Asterisk),
             b'_' => Some(EmphasisChar::Underscore),

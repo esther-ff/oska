@@ -16,7 +16,7 @@ use super::{
 pub trait InlineParser {
     fn parse(&mut self, item: Block<Unparsed>) -> Block<Parsed>;
     fn parse_doc(&mut self, doc: Document<Unparsed>) -> Document<Parsed>;
-    fn parse_inlines<'a>(&mut self, src: &'a str) -> Inlines;
+    fn parse_inlines(&mut self, src: &str) -> Inlines;
 }
 
 #[derive(Debug)]
