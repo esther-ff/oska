@@ -58,7 +58,7 @@ pub enum Inline {
 }
 
 impl Inline {
-    pub fn emph(strong: bool, delim: char, val: Inline) -> Inline {
+    pub fn emph(strong: bool, delim: EmphasisChar, val: Inline) -> Inline {
         Inline::Emph(Emphasis {
             strong,
             delim,
@@ -119,8 +119,29 @@ impl Inline {
 #[derive(Debug)]
 pub struct Emphasis {
     strong: bool,
-    delim: char,
+    delim: EmphasisChar,
     inner: Box<Inline>,
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Copy, Clone)]
+pub(crate) enum EmphasisChar {
+    Asterisk = 0,
+    Underscore = 1,
+}
+
+impl EmphasisChar {
+    pub(crate) fn from_u8(val: u8) -> Option<EmphasisChar> {
+        match val {
+            b'*' => Some(EmphasisChar::Asterisk),
+            b'_' => Some(EmphasisChar::Underscore),
+
+            _ => None,
+        }
+    }
+
+    pub fn to_char(self) -> char {
+        unsafe { *['*', '_'].get_unchecked(self as usize) }
+    }
 }
 
 impl Emphasis {
