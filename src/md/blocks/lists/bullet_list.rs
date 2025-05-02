@@ -50,26 +50,28 @@ pub fn bullet_list(
         "char given to `bullet_list` was not a `+`, a `*` nor a `-`"
     );
 
+    let mut tight = true;
+    let mut list_items = Vec::new();
     let initial = walker.position();
-    while let Some(char) = walker.next() {
-        if char == NEWLINE && check_for_possible_new_block(walker) {
-            break;
-        }
 
-        if char == NEWLINE
-            && walker.is_next_pred(is_bullet_list_marker)
-            && walker.peek(1) == Some(SPACE)
-        {
-            break;
+    while let Some(char) = walker.next() {
+        if char == NEWLINE {
+            if walker.is_next_char(NEWLINE) {
+                walker.advance(1);
+                tight = false;
+            }
+
+            if check_for_possible_new_block(walker)
+                || (walker.is_next_pred(is_bullet_list_marker)
+                    && walker.peek(1).is_some_and(|val| val == SPACE))
+            {
+                break;
+            }
         }
     }
 
-    let mut list_items = Vec::new();
     let mut new_walker = walker.walker_from_initial(initial);
-    let block = parser.block(&mut new_walker);
-    let mut tight = true;
-
-    list_items.push(ListItem::new(None, block));
+    list_items.push(ListItem::new(None, parser.block(&mut new_walker)));
 
     bullet_list_inner(parser, walker, &mut list_items, delim, &mut tight);
     Block::make_bullet_list(list_items, tight, parser.get_new_id())
@@ -91,32 +93,30 @@ fn bullet_list_inner(
         return;
     }
 
+    dbg!(unsafe { core::str::from_utf8_unchecked(walker.data()) });
     let initial = walker.position();
     while let Some(char) = walker.next() {
         if char == NEWLINE {
-            if check_for_possible_new_block(walker) {
-                break;
-            }
-
-            if walker.is_next_char(NEWLINE) {
+            if *tight && walker.is_next_char(NEWLINE) {
                 *tight = false;
                 walker.advance(1);
             }
+
+            if check_for_possible_new_block(walker)
+                || (walker.is_next_pred(|x| x == delim) && walker.peek(1) == Some(SPACE))
+            {
+                break;
+            };
 
             if walker.peek(0) != Some(delim) && walker.peek(0).is_some_and(is_bullet_list_marker) {
                 walker.retreat(1);
                 return;
             }
-
-            if walker.is_next_pred(|x| x == delim) && walker.peek(1) == Some(SPACE) {
-                break;
-            }
         }
     }
 
     let mut new_walker = walker.walker_from_initial(initial + 1);
-    let block = parser.block(&mut new_walker);
 
-    accum.push(ListItem::new(None, block));
+    accum.push(ListItem::new(None, parser.block(&mut new_walker)));
     bullet_list_inner(parser, walker, accum, delim, tight);
 }

@@ -456,7 +456,17 @@ mod tests {
 
     #[test]
     fn nested() {
-        let data = concat!("> 1. First list entry\n> 2. Second list entry\n 3. Third list entry");
+        let data = concat!(
+            // "> 1. First list entry\n",
+            // "> 2. Second list entry\n",
+            // "3. Third list entry\n",
+            // "> + Bullet list 1\n",
+            // "> + Bullet list 2\n",
+            // "> + Bullet list 3\n",
+            // "+ Outside blist 1\n\n",
+            // "+ Not tight!\n",
+            "+ > + > + > meow",
+        );
 
         let p = DefaultParser::new();
         let mut w = Walker::new(data);
