@@ -327,6 +327,8 @@ mod tests {
             "       code line 3\n",
             "       code line 4\n",
             "       code line 5\n",
+            "    code line 6\n", // these two are with tabs
+            "    code line 7\n",
         );
 
         let mut walker = Walker::new(data);
@@ -335,7 +337,7 @@ mod tests {
         let block = parser.block(&mut walker);
 
         let inner = match block {
-            Block::IndentedCode(ic) => ic,
+            Block::IndentedCode(ic) => dbg!(ic),
             _ => panic!("block was not indented code"),
         };
 
@@ -457,15 +459,15 @@ mod tests {
     #[test]
     fn nested() {
         let data = concat!(
-            // "> 1. First list entry\n",
-            // "> 2. Second list entry\n",
-            // "3. Third list entry\n",
-            // "> + Bullet list 1\n",
-            // "> + Bullet list 2\n",
-            // "> + Bullet list 3\n",
-            // "+ Outside blist 1\n\n",
-            // "+ Not tight!\n",
-            "+ > + > + > meow",
+            "> 1. First list entry\n",
+            "> 2. Second list entry\n",
+            "3. Third list entry\n",
+            "> + Bullet list 1\n",
+            "> + Bullet list 2\n",
+            "> + Bullet list 3\n",
+            "+ Outside blist 1\n\n",
+            "+ Not tight!\n",
+            "+ > # meow",
         );
 
         let p = DefaultParser::new();

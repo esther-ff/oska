@@ -91,18 +91,22 @@ pub fn blockquote(parser: &mut impl BlockParser, walker: &mut Walker<'_>) -> Blo
     }
 
     let data = walker.string_from_offset(initial + space);
-    let mut string = String::with_capacity(data.len());
     let mut iter = data.chars().peekable();
 
+    let mut string = String::with_capacity(data.len());
+
     while let Some(char) = iter.next() {
-        if char == '>' {
+        if char == '\n' && iter.peek().is_some_and(|x| *x == '>') {
+            let _gtr = iter.next();
+
             if iter.peek().is_some_and(|x| *x == ' ') {
                 let _space = iter.next();
             }
         }
-
         string.push(char)
     }
+
+    dbg!(&string);
 
     let mut new_walker = Walker::new(&string);
 

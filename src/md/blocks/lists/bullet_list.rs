@@ -54,6 +54,7 @@ pub fn bullet_list(
     let mut list_items = Vec::new();
     let initial = walker.position();
 
+    // dbg!(unsafe { core::str::from_utf8_unchecked(walker.data()) });
     while let Some(char) = walker.next() {
         if char == NEWLINE {
             if walker.is_next_char(NEWLINE) {
@@ -93,7 +94,7 @@ fn bullet_list_inner(
         return;
     }
 
-    dbg!(unsafe { core::str::from_utf8_unchecked(walker.data()) });
+    // dbg!(unsafe { core::str::from_utf8_unchecked(walker.data()) });
     let initial = walker.position();
     while let Some(char) = walker.next() {
         if char == NEWLINE {
