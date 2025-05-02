@@ -1,5 +1,6 @@
 use super::{Block, Parsed, Unparsed};
 use crate::md::chars::{EQUALS, NEWLINE};
+use crate::md::inlines::Inlines;
 use crate::md::walker::Walker;
 
 use crate::md::BlockParser;
@@ -8,6 +9,7 @@ use crate::md::blocks::{heading::handle_special_heading, utils::check_for_possib
 #[derive(Debug)]
 pub struct Paragraph {
     text: String,
+    inlines: Option<Inlines>,
     id: usize,
 }
 
@@ -22,7 +24,11 @@ impl Paragraph {
 }
 
 pub fn make_paragraph(text: String, id: usize) -> Paragraph {
-    Paragraph { text, id }
+    Paragraph {
+        text,
+        id,
+        inlines: None,
+    }
 }
 
 pub fn paragraph(parser: &mut impl BlockParser, walker: &mut Walker<'_>) -> Block<Unparsed> {

@@ -1,35 +1,64 @@
-pub struct Inlines<'i> {
-    list: Vec<Inline<'i>>,
-    src: String,
+use std::ops::Index;
+
+use super::walker::StrRange;
+
+#[derive(Debug)]
+pub struct Inlines {
+    list: Vec<Inline>,
 }
 
-impl<'a> Inlines<'a> {
-    pub fn new(src: String) -> Self {
-        Self {
-            list: Vec::new(),
-            src,
-        }
+impl Inlines {
+    pub fn new() -> Self {
+        Self { list: Vec::new() }
     }
 
-    pub fn add(&mut self, item: Inline<'a>) {
+    pub fn add(&mut self, item: Inline) {
         self.list.push(item);
     }
+
+    pub fn iter_values<'a, 'b>(&'b mut self, data: &'a str) -> impl IntoIterator<Item = &'a str>
+    where
+        'a: 'b,
+    {
+        fn grab<'a, 'b>(inl: &'b mut Inline, data: &'a str) -> &'a str
+        where
+            'a: 'b,
+        {
+            match inl {
+                Inline::Emoji(em) => em.name.resolve(data.as_bytes()),
+                Inline::HardBreak => "hard break",
+                Inline::SoftBreak => "soft break",
+                Inline::Text(txt) => txt.content.resolve(data.as_bytes()),
+                Inline::Code(code) => code.content.resolve(data.as_bytes()),
+
+                Inline::Emph(emph) => emph.map_inner(|x| grab(x, data)),
+                Inline::StrThr(str) => str.map_inner(|x| grab(x, data)),
+
+                Inline::Link(link) => link.map_str(data, |x| grab(x, data), |_| {}).0,
+
+                Inline::Image(img) => img.link.resolve(data.as_bytes()),
+            }
+        }
+
+        self.list.iter_mut().map(|val| grab(val, data))
+    }
 }
 
-pub enum Inline<'a> {
-    Emph(Emphasis<'a>),
-    Link(Link<'a>),
-    Image(Image<'a>),
-    StrThr(StrikeThrough<'a>),
-    Emoji(Emoji<'a>),
-    Code(Code<'a>),
+#[derive(Debug)]
+pub enum Inline {
+    Emph(Emphasis),
+    Link(Link),
+    Image(Image),
+    StrThr(StrikeThrough),
+    Emoji(Emoji),
+    Code(Code),
     SoftBreak,
     HardBreak,
-    Text(Text<'a>),
+    Text(Text),
 }
 
-impl<'a> Inline<'a> {
-    pub fn emph(strong: bool, delim: char, val: Inline<'a>) -> Inline<'a> {
+impl Inline {
+    pub fn emph(strong: bool, delim: char, val: Inline) -> Inline {
         Inline::Emph(Emphasis {
             strong,
             delim,
@@ -37,13 +66,16 @@ impl<'a> Inline<'a> {
         })
     }
 
-    pub fn link(name: &'a str, target: &'a str) -> Inline<'a> {
-        Inline::Link(Link { name, target })
+    pub fn link(name: Inline, target: StrRange) -> Inline {
+        Inline::Link(Link {
+            name: Box::new(name),
+            target,
+        })
     }
 
-    pub fn image<A>(alt: A, link: &'a str) -> Inline<'a>
+    pub fn image<A>(alt: A, link: StrRange) -> Inline
     where
-        A: Into<Option<&'a str>>,
+        A: Into<Option<StrRange>>,
     {
         Inline::Image(Image {
             alt: alt.into(),
@@ -51,61 +83,150 @@ impl<'a> Inline<'a> {
         })
     }
 
-    pub fn strthr(val: Inline<'a>) -> Inline<'a> {
+    pub fn strthr(val: Inline) -> Inline {
         Inline::StrThr(StrikeThrough {
             inner: Box::new(val),
         })
     }
 
-    pub fn emoji(name: &'a str) -> Inline<'a> {
-        Inline::Emoji(Emoji { name })
+    pub fn emoji(start: usize, end: usize) -> Inline {
+        Inline::Emoji(Emoji {
+            name: StrRange::new(start, end),
+        })
     }
 
-    pub fn text(content: &'a str) -> Inline<'a> {
-        Inline::Text(Text { content })
+    pub fn text(start: usize, end: usize) -> Inline {
+        Inline::Text(Text {
+            content: StrRange::new(start, end),
+        })
     }
 
-    pub fn code(content: &'a str) -> Inline<'a> {
-        Inline::Code(Code { content })
+    pub fn code(start: usize, end: usize) -> Inline {
+        Inline::Code(Code {
+            content: StrRange::new(start, end),
+        })
     }
 
-    pub fn soft_break() -> Inline<'a> {
+    pub fn soft_break() -> Inline {
         Inline::SoftBreak
     }
 
-    pub fn hard_break() -> Inline<'a> {
+    pub fn hard_break() -> Inline {
         Inline::HardBreak
     }
 }
 
-pub struct Emphasis<'a> {
+#[derive(Debug)]
+pub struct Emphasis {
     strong: bool,
     delim: char,
-    inner: Box<Inline<'a>>,
+    inner: Box<Inline>,
 }
 
-pub struct Link<'a> {
-    name: &'a str,
-    target: &'a str,
+impl Emphasis {
+    pub fn map_inner<F, T>(&mut self, func: F) -> T
+    where
+        F: FnOnce(&mut Inline) -> T,
+    {
+        func(self.inner.as_mut())
+    }
 }
 
-pub struct Image<'a> {
-    alt: Option<&'a str>,
-    link: &'a str,
+#[derive(Debug)]
+pub struct Link {
+    name: Box<Inline>,
+    target: StrRange,
 }
 
-pub struct StrikeThrough<'a> {
-    inner: Box<Inline<'a>>,
+impl Link {
+    pub fn map_str<'d, F1, F2, T1, T2>(&mut self, data: &'d str, fl: F1, fr: F2) -> (T1, T2)
+    where
+        F1: FnOnce(&mut Inline) -> T1 + 'd,
+        F2: FnOnce(&str) -> T2 + 'd,
+    {
+        (
+            fl(self.name.as_mut()),
+            fr(self.target.resolve(data.as_bytes())),
+        )
+    }
 }
 
-pub struct Emoji<'a> {
-    name: &'a str,
+#[derive(Debug)]
+pub struct Image {
+    alt: Option<StrRange>,
+    link: StrRange,
 }
 
-pub struct Text<'a> {
-    content: &'a str,
+impl Image {
+    pub fn map_str<'d, F1, F2, T1, T2>(&self, data: &'d str, fl: F1, fr: F2) -> (Option<T1>, T2)
+    where
+        F1: FnOnce(&str) -> T1 + 'd,
+        F2: FnOnce(&str) -> T2 + 'd,
+    {
+        let left = if let Some(ref val) = self.alt {
+            fl(val.resolve(data.as_bytes())).into()
+        } else {
+            None
+        };
+
+        let right = fr(self.link.resolve(data.as_bytes()));
+
+        (left, right)
+    }
 }
 
-pub struct Code<'a> {
-    content: &'a str,
+#[derive(Debug)]
+pub struct StrikeThrough {
+    inner: Box<Inline>,
+}
+
+impl StrikeThrough {
+    pub fn map_inner<F, T>(&mut self, func: F) -> T
+    where
+        F: FnOnce(&mut Inline) -> T,
+    {
+        func(self.inner.as_mut())
+    }
+}
+
+#[derive(Debug)]
+pub struct Emoji {
+    name: StrRange,
+}
+
+impl Emoji {
+    pub fn map_str<F, T>(&self, data: &str, func: F) -> T
+    where
+        F: FnOnce(&str) -> T,
+    {
+        func(self.name.resolve(data.as_bytes()))
+    }
+}
+
+#[derive(Debug)]
+pub struct Text {
+    content: StrRange,
+}
+
+impl Text {
+    pub fn map_str<F, T>(&self, data: &str, func: F) -> T
+    where
+        F: FnOnce(&str) -> T,
+    {
+        func(self.content.resolve(data.as_bytes()))
+    }
+}
+
+#[derive(Debug)]
+pub struct Code {
+    content: StrRange,
+}
+
+impl Code {
+    pub fn map_str<F, T>(&self, data: &str, func: F) -> T
+    where
+        F: FnOnce(&str) -> T,
+    {
+        func(self.content.resolve(data.as_bytes()))
+    }
 }

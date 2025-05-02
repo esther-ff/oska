@@ -22,7 +22,10 @@ impl StrRange {
         (self.start, self.end)
     }
 
-    pub fn resolve(self, data: &[u8]) -> &str {
+    pub fn resolve<'a, 'b>(&'b self, data: &'a [u8]) -> &'a str
+    where
+        'a: 'b,
+    {
         let bytes = data
             .get(self.start..self.end)
             .expect("out of bounds access");
