@@ -2,6 +2,7 @@ mod chars;
 mod html_constants;
 
 pub mod inline_parser;
+pub mod inlines;
 
 pub mod block_parser;
 pub mod blocks;
