@@ -179,29 +179,34 @@ impl DefInlineParser {
         }
 
         while let Some((index, delim)) = iter.next() {
-            if val.char == delim.char && (val.amnt >= delim.amnt) && delim.binding == Binding::Right
-            {
-                let char = EmphasisChar::from_u8(val.char).unwrap();
+            dbg!((&val, &delim));
+            if val.amnt == delim.amnt {
+                if val.char == delim.char {
+                    let char = EmphasisChar::from_u8(val.char).unwrap();
 
-                val.binding = Binding::Closed;
+                    val.binding = Binding::Closed;
+                    delim.binding = Binding::Closed;
+
+                    let start = val.pos.1;
+                    let end = delim.pos.0 - 1;
+
+                    return Inline::emph(
+                        val.amnt > 1,
+                        char,
+                        self.parse_one_inline(&mut slice[first_index..index], (start, end)),
+                    );
+                }
+            } else {
                 delim.binding = Binding::Closed;
-
-                let start = val.pos.1;
-                let end = delim.pos.0 - 1;
-
-                return Inline::emph(
-                    val.amnt > 1,
-                    char,
-                    self.parse_one_inline(&mut slice[first_index..index], (start, end)),
-                );
+                // return Inline::text(delim.pos.0, delim.pos.1);
             }
         }
 
         dbg!(val.char);
         if val.char != NEWLINE {
-            Inline::text(val.pos.0, val.pos.1)
+            Inline::text(val.pos.0, val.pos.1 + 1)
         } else {
-            Inline::text(old.0, old.1)
+            Inline::text(old.0, old.1 + 1)
         }
     }
 }
@@ -212,6 +217,8 @@ impl InlineParser for DefInlineParser {
         let mut walker = Walker::new(src);
 
         let mut delims = delimeters(&mut walker);
+
+        dbg!(&delims);
 
         inl.add(self.parse_one_inline(&mut delims, (0, 0)));
         inl.add(self.parse_one_inline(&mut delims, (0, 0)));
@@ -237,15 +244,15 @@ mod tests {
 
     #[test]
     fn bold() {
-        let data = "**__Sam_ple__**\n";
+        let data = "**__Sam_ple__**_\n";
 
         let mut parser = DefInlineParser {};
 
         let mut inl = parser.parse_inlines(data);
 
-        inl.iter_values(data)
-            .into_iter()
-            .for_each(|x| println!("{:#?}", x));
+        // inl.iter_values(data)
+        //     .into_iter()
+        //     .for_each(|x| println!("{:#?}", x));
     }
 }
 

@@ -16,32 +16,32 @@ impl Inlines {
         self.list.push(item);
     }
 
-    pub fn iter_values<'a, 'b>(&'b mut self, data: &'a str) -> impl IntoIterator<Item = &'a str>
-    where
-        'a: 'b,
-    {
-        fn grab<'a, 'b>(inl: &'b mut Inline, data: &'a str) -> &'a str
-        where
-            'a: 'b,
-        {
-            match inl {
-                Inline::Emoji(em) => em.name.resolve(data.as_bytes()),
-                Inline::HardBreak => "hard break",
-                Inline::SoftBreak => "soft break",
-                Inline::Text(txt) => txt.content.resolve(data.as_bytes()),
-                Inline::Code(code) => code.content.resolve(data.as_bytes()),
+    // pub fn iter_values<'a, 'b>(&'b mut self, data: &'a str) -> impl IntoIterator<Item = &'a str>
+    // where
+    //     'a: 'b,
+    // {
+    //     fn grab<'a, 'b>(inl: &'b mut Inline, data: &'a str) -> &'a str
+    //     where
+    //         'a: 'b,
+    //     {
+    //         match inl {
+    //             Inline::Emoji(em) => em.name.resolve(data.as_bytes()),
+    //             Inline::HardBreak => "hard break",
+    //             Inline::SoftBreak => "soft break",
+    //             Inline::Text(txt) => txt.content.resolve(data.as_bytes()),
+    //             Inline::Code(code) => code.content.resolve(data.as_bytes()),
 
-                Inline::Emph(emph) => emph.map_inner(|x| grab(x, data)),
-                Inline::StrThr(str) => str.map_inner(|x| grab(x, data)),
+    //             Inline::Emph(emph) => emph.map_inner(|x| grab(x, data)),
+    //             Inline::StrThr(str) => str.map_inner(|x| grab(x, data)),
 
-                Inline::Link(link) => link.map_str(data, |x| grab(x, data), |_| {}).0,
+    //             Inline::Link(link) => link.map_str(data, |x| grab(x, data), |_| {}).0,
 
-                Inline::Image(img) => img.link.resolve(data.as_bytes()),
-            }
-        }
+    //             Inline::Image(img) => img.link.resolve(data.as_bytes()),
+    //         }
+    //     }
 
-        self.list.iter_mut().map(|val| grab(val, data))
-    }
+    //     self.list.iter_mut().map(|val| grab(val, data))
+    // }
 }
 
 impl Default for Inlines {
@@ -64,17 +64,26 @@ pub enum Inline {
 }
 
 impl Inline {
-    pub fn emph(strong: bool, delim: EmphasisChar, val: Inline) -> Inline {
+    pub fn expose_inlines(&mut self) -> Option<&mut Vec<Inline>> {
+        match self {
+            Self::Emph(emp) => Some(&mut emp.inner),
+            Self::StrThr(str) => Some(&mut str.inner),
+            Self::Link(link) => Some(&mut link.name),
+
+            _ => None,
+        }
+    }
+    pub fn emph(strong: bool, delim: EmphasisChar) -> Inline {
         Inline::Emph(Emphasis {
             strong,
             delim,
-            inner: Box::new(val),
+            inner: Vec::new(),
         })
     }
 
     pub fn link(name: Inline, target: StrRange) -> Inline {
         Inline::Link(Link {
-            name: Box::new(name),
+            name: Vec::new(),
             target,
         })
     }
@@ -89,10 +98,8 @@ impl Inline {
         })
     }
 
-    pub fn strthr(val: Inline) -> Inline {
-        Inline::StrThr(StrikeThrough {
-            inner: Box::new(val),
-        })
+    pub fn strthr() -> Inline {
+        Inline::StrThr(StrikeThrough { inner: Vec::new() })
     }
 
     pub fn emoji(start: usize, end: usize) -> Inline {
@@ -126,7 +133,7 @@ impl Inline {
 pub struct Emphasis {
     strong: bool,
     delim: EmphasisChar,
-    inner: Box<Inline>,
+    inner: Vec<Inline>,
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Copy, Clone)]
@@ -153,28 +160,25 @@ impl EmphasisChar {
 impl Emphasis {
     pub fn map_inner<F, T>(&mut self, func: F) -> T
     where
-        F: FnOnce(&mut Inline) -> T,
+        F: FnOnce(&mut Vec<Inline>) -> T,
     {
-        func(self.inner.as_mut())
+        func(&mut self.inner)
     }
 }
 
 #[derive(Debug)]
 pub struct Link {
-    name: Box<Inline>,
+    name: Vec<Inline>,
     target: StrRange,
 }
 
 impl Link {
     pub fn map_str<'d, F1, F2, T1, T2>(&mut self, data: &'d str, fl: F1, fr: F2) -> (T1, T2)
     where
-        F1: FnOnce(&mut Inline) -> T1 + 'd,
+        F1: FnOnce(&mut Vec<Inline>) -> T1 + 'd,
         F2: FnOnce(&str) -> T2 + 'd,
     {
-        (
-            fl(self.name.as_mut()),
-            fr(self.target.resolve(data.as_bytes())),
-        )
+        (fl(&mut self.name), fr(self.target.resolve(data.as_bytes())))
     }
 }
 
@@ -204,15 +208,15 @@ impl Image {
 
 #[derive(Debug)]
 pub struct StrikeThrough {
-    inner: Box<Inline>,
+    inner: Vec<Inline>,
 }
 
 impl StrikeThrough {
     pub fn map_inner<F, T>(&mut self, func: F) -> T
     where
-        F: FnOnce(&mut Inline) -> T,
+        F: FnOnce(&mut Vec<Inline>) -> T,
     {
-        func(self.inner.as_mut())
+        func(&mut self.inner)
     }
 }
 
