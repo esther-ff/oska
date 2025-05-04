@@ -1,5 +1,3 @@
-use std::ops::Index;
-
 use super::walker::StrRange;
 
 #[derive(Debug)]
@@ -14,6 +12,10 @@ impl Inlines {
 
     pub fn add(&mut self, item: Inline) {
         self.list.push(item);
+    }
+
+    pub fn inner(&mut self) -> &mut Vec<Inline> {
+        &mut self.list
     }
 
     // pub fn iter_values<'a, 'b>(&'b mut self, data: &'a str) -> impl IntoIterator<Item = &'a str>

@@ -19,20 +19,38 @@ pub trait InlineParser {
 
 #[derive(Debug)]
 struct Delim {
-    char: u8,
+    char: DelimChar,
     amnt: usize,
     pos: (usize, usize),
     binding: Binding,
 }
 
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq)]
+enum DelimChar {
+    ExclBracket,
+    Asterisk,
+    Underscore,
+    Tilde,
+    Bracket,
+    Newline,
+}
+
 impl Delim {
-    fn new(char: u8, amnt: usize, start: usize, end: usize, binding: Binding) -> Self {
+    fn new(char: DelimChar, amnt: usize, start: usize, end: usize, binding: Binding) -> Self {
         Self {
             char,
             amnt,
             pos: (start, end),
             binding,
         }
+    }
+
+    fn close(&mut self) {
+        self.binding = Binding::Closed;
+    }
+
+    fn as_str<'b>(&self, data: &'b str) -> Option<&'b str> {
+        data.get(self.pos.0..self.pos.1)
     }
 }
 
@@ -60,55 +78,80 @@ pub struct DefInlineParser {}
 
 fn delimeters(walker: &mut Walker) -> Vec<Delim> {
     let mut delims = Vec::new();
-    let mut binding = Binding::Left;
-    let mut last_char: [(u8, Binding); 2] =
-        [(ASTERISK, Binding::None), (UNDERSCORE, Binding::None)];
 
-    while let Some(char) = walker.next() {
-        match char {
+    while let Some(output) = walker.next() {
+        match output {
+            b'!' => {
+                if walker.is_next_char(b'[') {
+                    walker.advance(1);
+                    delims.push(Delim {
+                        char: DelimChar::ExclBracket,
+                        binding: Binding::Left,
+                        amnt: 1,
+                        pos: (walker.position(), walker.position() + 1),
+                    })
+                }
+            }
+
+            b'~' => {
+                let start = walker.position();
+                let amnt = walker.till_not(b'~') + 1;
+                let pos = (start, walker.position() + 1);
+
+                delims.push(Delim {
+                    char: DelimChar::Tilde,
+                    amnt,
+                    pos,
+                    binding: Binding::None,
+                })
+            }
+
+            b'[' => delims.push(Delim {
+                char: DelimChar::Bracket,
+                amnt: 1,
+                pos: (walker.position(), walker.position() + 1),
+                binding: Binding::Left,
+            }),
+
+            b']' => delims.push(Delim {
+                char: DelimChar::Bracket,
+                amnt: 1,
+                pos: (walker.position(), walker.position() + 1),
+                binding: Binding::Right,
+            }),
+
             ASTERISK => {
                 let start = walker.position();
+                let amnt = walker.till_not(ASTERISK) + 1;
+                let pos = (start - 1, walker.position());
 
-                if last_char[0].1 == Binding::None {
-                    last_char[0].1 = Binding::Left
-                }
-
-                delims.push(Delim::new(
-                    ASTERISK,
-                    walker.till_not(ASTERISK) + 1,
-                    start,
-                    walker.position(),
-                    last_char[0].1,
-                ));
-
-                last_char[0].1.rev();
+                delims.push(Delim {
+                    char: DelimChar::Asterisk,
+                    amnt,
+                    pos,
+                    binding: Binding::None,
+                })
             }
 
             UNDERSCORE => {
                 let start = walker.position();
+                let amnt = walker.till_not(UNDERSCORE) + 1;
+                let pos = (start - 1, walker.position());
 
-                if last_char[1].1 == Binding::None {
-                    last_char[1].1 = Binding::Left
-                }
-
-                delims.push(Delim::new(
-                    UNDERSCORE,
-                    walker.till_not(UNDERSCORE) + 1,
-                    start,
-                    walker.position(),
-                    last_char[1].1,
-                ));
-
-                last_char[1].1.rev();
+                delims.push(Delim {
+                    char: DelimChar::Underscore,
+                    amnt,
+                    pos,
+                    binding: Binding::None,
+                })
             }
 
-            NEWLINE => delims.push(Delim::new(
-                NEWLINE,
-                1,
-                walker.position(),
-                walker.position(),
-                Binding::None,
-            )),
+            b'\n' => delims.push(Delim {
+                char: DelimChar::Newline,
+                amnt: 1,
+                pos: (walker.position() - 1, walker.position()),
+                binding: Binding::None,
+            }),
 
             _ => {}
         }
@@ -117,99 +160,124 @@ fn delimeters(walker: &mut Walker) -> Vec<Delim> {
     delims
 }
 
-impl DefInlineParser {
-    // fn parse_inlines_inner(&mut self, iterations: usize, delims: &mut [Delim]) -> Inline {
-    //     dbg!(&delims);
+fn parse_inlines_private(
+    inlines: &mut Vec<Inline>,
+    delimeters: &mut [Delim],
+    previous_pos: (usize, usize),
+) -> bool {
+    let mut iter = delimeters
+        .iter_mut()
+        .filter(|delim| delim.binding != Binding::Closed)
+        .enumerate()
+        .peekable();
 
-    //     // if iterations == delims.len() - 1 {
-    //     //     return;
-    //     // }
-
-    //     let mut iter_mut = delims[0..]
-    //         .iter_mut()
-    //         .filter(|x| x.binding != Binding::Closed);
-
-    //     let elem = iter_mut.next().unwrap();
-
-    //     for element in iter_mut {
-    //         if (element.char == elem.char)
-    //             && (element.amnt >= elem.amnt)
-    //             && element.binding == Binding::Right
-    //         {
-    //             elem.binding = Binding::Closed;
-    //             element.binding = Binding::Closed;
-
-    //             if elem.amnt > 1 {
-    //                 let emph = Inline::emph(
-    //                     false,
-    //                     EmphasisChar::from_u8(elem.char).unwrap(),
-    //                     self.parse_inlines_inner(iterations, delims),
-    //                 );
-
-    //                 return emph;
-    //             } else {
-    //                 let emph = Inline::emph(
-    //                     false,
-    //                     EmphasisChar::from_u8(elem.char).unwrap(),
-    //                     self.parse_inlines_inner(iterations, delims),
-    //                 );
-
-    //                 return emph;
-    //             }
-    //         }
-    //     }
-
-    //     unreachable!()
-    // }
-
-    fn parse_one_inline(&mut self, slice: &mut [Delim], old: (usize, usize)) -> Inline {
-        let mut iter = slice
-            .iter_mut()
-            .filter(|x| x.binding != Binding::Closed)
-            .enumerate();
-
-        let (first_index, val) = match iter.next() {
-            None => return Inline::text(old.0, old.1),
-            Some((f, v)) => (f, v),
-        };
-
-        if val.char == NEWLINE {
-            val.binding = Binding::Closed;
-            return Inline::soft_break();
+    let (base_index, base) = match iter.next() {
+        None => {
+            inlines.push(Inline::text(previous_pos.0, previous_pos.1));
+            return false;
         }
+        Some((index, val)) => (index, val),
+    };
 
-        while let Some((index, delim)) = iter.next() {
-            dbg!((&val, &delim));
-            if val.amnt == delim.amnt {
-                if val.char == delim.char {
-                    let char = EmphasisChar::from_u8(val.char).unwrap();
+    dbg!(&base);
 
-                    val.binding = Binding::Closed;
-                    delim.binding = Binding::Closed;
+    let mut maybes: Vec<&mut Delim> = Vec::new();
 
-                    let start = val.pos.1;
-                    let end = delim.pos.0 - 1;
+    while let Some((index, next)) = iter.next() {
+        if base.char == next.char {
+            match &base.char {
+                cap @ (DelimChar::Asterisk | DelimChar::Underscore) => {
+                    let char = match cap {
+                        DelimChar::Asterisk => EmphasisChar::Asterisk,
+                        DelimChar::Underscore => EmphasisChar::Underscore,
 
-                    return Inline::emph(
-                        val.amnt > 1,
-                        char,
-                        self.parse_one_inline(&mut slice[first_index..index], (start, end)),
-                    );
+                        _ => unreachable!(),
+                    };
+
+                    let finished = iter.peek().is_some();
+                    let even: bool;
+
+                    match base.amnt.cmp(&next.amnt) {
+                        core::cmp::Ordering::Equal => {
+                            even = base.amnt % 2 == 0;
+
+                            base.close();
+                            next.close();
+                        }
+
+                        core::cmp::Ordering::Less => {
+                            even = base.amnt % 2 == 0;
+                            next.amnt -= base.amnt;
+                            base.close();
+                        }
+
+                        core::cmp::Ordering::Greater => {
+                            // base.amnt -= next.amnt;
+                            // next.close();
+                            //
+
+                            even = next.amnt % 2 == 0;
+                            dbg!((&base, &next));
+                            maybes.push(next);
+
+                            continue;
+
+                            // panic!("was greater");
+                        }
+                    }
+
+                    let pos = (base.pos.1 + 1, next.pos.0);
+
+                    let emph = if even {
+                        let mut val = Inline::emph(base.amnt > 1, char);
+
+                        parse_inlines_private(
+                            val.expose_inlines().unwrap(),
+                            &mut delimeters[base_index..index],
+                            pos,
+                        );
+
+                        val
+                    } else {
+                        let mut outer = Inline::emph(true, char);
+                        let mut inner = Inline::emph(false, char);
+
+                        parse_inlines_private(
+                            inner.expose_inlines().unwrap(),
+                            &mut delimeters[base_index..index],
+                            pos,
+                        );
+
+                        outer.expose_inlines().map(|x| x.push(inner));
+
+                        outer
+                    };
+
+                    inlines.push(emph);
+                    return finished;
                 }
-            } else {
-                delim.binding = Binding::Closed;
-                // return Inline::text(delim.pos.0, delim.pos.1);
-            }
-        }
 
-        dbg!(val.char);
-        if val.char != NEWLINE {
-            Inline::text(val.pos.0, val.pos.1 + 1)
-        } else {
-            Inline::text(old.0, old.1 + 1)
+                DelimChar::Tilde => {}
+                DelimChar::Bracket => {}
+                DelimChar::Newline => {}
+                DelimChar::ExclBracket => unreachable!(),
+            }
+        } else if base.char == DelimChar::ExclBracket && next.char == DelimChar::Bracket {
+            todo!()
         }
     }
+
+    println!("meow");
+    inlines.push(Inline::text(previous_pos.0, previous_pos.1));
+
+    true
 }
+
+fn parse_inlines_outer(inl: &mut Vec<Inline>, delimeters: &mut [Delim]) {
+    parse_inlines_private(inl, delimeters, (0, 0));
+}
+
+impl DefInlineParser {}
 
 impl InlineParser for DefInlineParser {
     fn parse_inlines(&mut self, src: &str) -> Inlines {
@@ -218,10 +286,12 @@ impl InlineParser for DefInlineParser {
 
         let mut delims = delimeters(&mut walker);
 
-        dbg!(&delims);
+        // delims
+        //     .iter()
+        //     .map(|delim| delim.as_str(src))
+        //     .for_each(|x| println!("{:#?}", x));
 
-        inl.add(self.parse_one_inline(&mut delims, (0, 0)));
-        inl.add(self.parse_one_inline(&mut delims, (0, 0)));
+        parse_inlines_outer(inl.inner(), &mut delims);
 
         dbg!(&inl);
 
@@ -244,7 +314,7 @@ mod tests {
 
     #[test]
     fn bold() {
-        let data = "**__Sam_ple__**_\n";
+        let data = "***__Sam_ple__***_\n";
 
         let mut parser = DefInlineParser {};
 
@@ -295,3 +365,66 @@ mod tests {
 //                     //
 //                 }
 //             }
+// fn parse_one_inline(
+//     &mut self,
+//     slice: &mut [Delim],
+//     old: (usize, usize),
+//     inl: &mut Vec<Inline>,
+//     inner: bool,
+// ) -> bool {
+//     let mut iter = slice
+//         .iter_mut()
+//         .filter(|x| x.binding != Binding::Closed)
+//         .enumerate();
+
+//     match iter.next() {
+//         None => return false,
+//         Some((first_index, val)) => {
+//             dbg!(&val);
+//             if val.char == '\n' {
+//                 val.binding = Binding::Closed;
+//                 inl.push(Inline::soft_break());
+//                 return true;
+//             }
+
+//             while let Some((index, delim)) = iter.next() {
+//                 if val.amnt == delim.amnt {
+//                     if val.char == delim.char {
+//                         let char = match delim.char {
+//                             '*' => EmphasisChar::Asterisk,
+//                             '_' => EmphasisChar::Underscore,
+//                             _ => panic!("invalid"),
+//                         };
+
+//                         val.close();
+//                         delim.close();
+
+//                         let pos = (val.pos.0 + val.amnt, delim.pos.1 - delim.amnt);
+
+//                         let mut emph = Inline::emph(val.amnt > 1, char);
+
+//                         dbg!(&mut slice[first_index..index]);
+//                         self.parse_one_inline(
+//                             &mut slice[first_index..index],
+//                             pos,
+//                             emph.expose_inlines().unwrap(),
+//                             true,
+//                         );
+
+//                         inl.push(emph);
+
+//                         return true;
+//                     }
+//                 } else {
+//                     delim.close();
+//                 }
+//             }
+
+//             println!("cannons");
+//             val.close();
+//             inl.push(Inline::text(val.pos.0, val.pos.1 + 1))
+//         }
+//     };
+
+//     true
+// }
