@@ -71,6 +71,7 @@ impl Inline {
             Self::Emph(emp) => Some(&mut emp.inner),
             Self::StrThr(str) => Some(&mut str.inner),
             Self::Link(link) => Some(&mut link.name),
+            Self::Image(image) => Some(&mut image.alt),
 
             _ => None,
         }
@@ -83,19 +84,16 @@ impl Inline {
         })
     }
 
-    pub fn link(name: Inline, target: StrRange) -> Inline {
+    pub fn link(target: StrRange) -> Inline {
         Inline::Link(Link {
             name: Vec::new(),
             target,
         })
     }
 
-    pub fn image<A>(alt: A, link: StrRange) -> Inline
-    where
-        A: Into<Option<StrRange>>,
-    {
+    pub fn image(link: StrRange) -> Inline {
         Inline::Image(Image {
-            alt: alt.into(),
+            alt: Vec::new(),
             link,
         })
     }
@@ -186,27 +184,27 @@ impl Link {
 
 #[derive(Debug)]
 pub struct Image {
-    alt: Option<StrRange>,
+    alt: Vec<Inline>,
     link: StrRange,
 }
 
-impl Image {
-    pub fn map_str<'d, F1, F2, T1, T2>(&self, data: &'d str, fl: F1, fr: F2) -> (Option<T1>, T2)
-    where
-        F1: FnOnce(&str) -> T1 + 'd,
-        F2: FnOnce(&str) -> T2 + 'd,
-    {
-        let left = if let Some(ref val) = self.alt {
-            fl(val.resolve(data.as_bytes())).into()
-        } else {
-            None
-        };
+// impl Image {
+//     pub fn map_str<'d, F1, F2, T1, T2>(&self, data: &'d str, fl: F1, fr: F2) -> (Option<T1>, T2)
+//     where
+//         F1: FnOnce(&str) -> T1 + 'd,
+//         F2: FnOnce(&str) -> T2 + 'd,
+//     {
+//         let left = if let Some(ref val) = self.alt {
+//             fl(val.resolve(data.as_bytes())).into()
+//         } else {
+//             None
+//         };
 
-        let right = fr(self.link.resolve(data.as_bytes()));
+//         let right = fr(self.link.resolve(data.as_bytes()));
 
-        (left, right)
-    }
-}
+//         (left, right)
+//     }
+// }
 
 #[derive(Debug)]
 pub struct StrikeThrough {
