@@ -7,7 +7,6 @@ use crate::md::{
 
 use core::cell::{Cell, Ref, RefCell, RefMut};
 use core::fmt::Debug;
-use std::ops::Deref;
 use unicode_categories::UnicodeCategories;
 
 /// A trait representing a parser for inline elements
@@ -16,6 +15,37 @@ pub trait InlineParser {
     fn parse(&mut self, item: Block<Unparsed>) -> Block<Parsed>;
     fn parse_doc(&mut self, doc: Document<Unparsed>) -> Document<Parsed>;
     fn parse_inlines(&mut self, src: &str) -> Inlines;
+}
+
+/// Default parser for Inlines
+pub struct DefInlineParser;
+
+impl InlineParser for DefInlineParser {
+    fn parse_inlines(&mut self, src: &str) -> Inlines {
+        let mut inl = Inlines::new();
+        let mut walker = Walker::new(src);
+        let arena = Arena::new();
+
+        tokenize(&mut walker, inl.inner(), &arena);
+
+        let mut last = arena.previous();
+
+        while let Some(inner) = last {
+            println!("{:#?}", &*inner.val.borrow());
+            last = inner.prev.get();
+        }
+
+        dbg!(&inl);
+        inl
+    }
+
+    fn parse(&mut self, item: Block<Unparsed>) -> Block<Parsed> {
+        todo!()
+    }
+
+    fn parse_doc(&mut self, doc: Document<Unparsed>) -> Document<Parsed> {
+        todo!()
+    }
 }
 
 // Arena for the delimeters
@@ -106,7 +136,7 @@ impl<'a, T> Node<'a, T> {
     }
 }
 
-impl<'a, T: Debug> Debug for Node<'a, T> {
+impl<T: Debug> Debug for Node<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Node")
             .field("val", &self.val)
@@ -136,10 +166,6 @@ struct Token {
     // Position
     pos: TokenPos,
 
-    // // Next and previous tokens
-    // next: Cell<Option<*mut Token>>,
-    // prev: Cell<Option<*mut Token>>,
-
     // Node it is pointing to
     node: Cell<Option<*mut Inline>>,
 
@@ -148,6 +174,12 @@ struct Token {
 
     // Whether the token is closed
     closed: bool,
+}
+
+#[derive(Debug)]
+struct TokenPos {
+    start: usize,
+    end: usize,
 }
 
 impl Token {
@@ -169,12 +201,6 @@ impl Token {
     }
 }
 
-#[derive(Debug)]
-struct TokenPos {
-    start: usize,
-    end: usize,
-}
-
 impl TokenPos {
     fn new(start: usize, end: usize) -> Self {
         Self { start, end }
@@ -185,14 +211,6 @@ impl TokenPos {
     }
 }
 
-fn remove_node<'a, T>(node: &Node<'a, T>) {
-    let prev = node.prev.get();
-    let next = node.next.get();
-
-    next.map(|node| node.prev.replace(prev));
-    prev.map(|node| node.next.replace(next));
-}
-
 struct Cursor<'a> {
     cur: Option<&'a Node<'a, Token>>,
 }
@@ -200,7 +218,7 @@ struct Cursor<'a> {
 impl Cursor<'_> {
     fn next(&mut self) -> bool {
         match self.cur {
-            Some(ptr) => match unsafe { (*ptr).next.get() } {
+            Some(ptr) => match ptr.next.get() {
                 Some(next_ptr) => {
                     self.cur.replace(next_ptr);
                     true
@@ -213,7 +231,7 @@ impl Cursor<'_> {
 
     fn back(&mut self) -> bool {
         match self.cur {
-            Some(ptr) => match unsafe { (*ptr).prev.get() } {
+            Some(ptr) => match ptr.prev.get() {
                 Some(next_ptr) => {
                     self.cur.replace(next_ptr);
                     true
@@ -408,7 +426,7 @@ fn find_delims<'a>(
     } else {
         let mut before_pos = pos - 1;
 
-        while before_pos > 0 && !(w.data()[before_pos] >> 6 == 2) {
+        while before_pos > 0 && w.data()[before_pos] >> 6 != 2 {
             before_pos -= 1;
         }
 
@@ -416,7 +434,7 @@ fn find_delims<'a>(
 
         // dbg!(w.get(before_pos, pos));
 
-        w.get(before_pos, pos).chars().rev().next().unwrap_or('\n')
+        w.get(before_pos, pos).chars().next_back().unwrap_or('\n')
     };
 
     let amount = w.till_not(ch) + 1;
@@ -471,11 +489,9 @@ fn find_delims<'a>(
         }
 
         '_' => {
-            if left_flanking && (!right_flanking || (right_flanking && before.is_punctuation())) {
+            if left_flanking && !right_flanking || before.is_punctuation() {
                 Ability::Opener
-            } else if right_flanking
-                && (!left_flanking || (left_flanking && after.is_punctuation()))
-            {
+            } else if right_flanking && !left_flanking || after.is_punctuation() {
                 Ability::Closer
             } else {
                 Ability::None
@@ -508,42 +524,12 @@ fn process_emphasis(last: Option<*mut Token>, node: *mut Token, bottom: usize) {
     let mut openers_bottom: [usize; 2] = [bottom; 2];
 }
 
-// Default parser for Inlines
-pub struct DefInlineParser {}
+fn remove_node<T>(node: &Node<T>) {
+    let prev = node.prev.get();
+    let next = node.next.get();
 
-impl DefInlineParser {}
-
-impl InlineParser for DefInlineParser {
-    fn parse_inlines(&mut self, src: &str) -> Inlines {
-        let mut inl = Inlines::new();
-        let mut walker = Walker::new(src);
-        let arena = Arena::new();
-
-        tokenize(&mut walker, inl.inner(), &arena);
-
-        let mut last = arena.previous();
-
-        loop {
-            match last {
-                Some(val) => {
-                    println!("{:#?}", val.val);
-                    last = val.prev.get();
-                }
-                None => break,
-            }
-        }
-
-        dbg!(&inl);
-        inl
-    }
-
-    fn parse(&mut self, item: Block<Unparsed>) -> Block<Parsed> {
-        todo!()
-    }
-
-    fn parse_doc(&mut self, doc: Document<Unparsed>) -> Document<Parsed> {
-        todo!()
-    }
+    next.map(|node| node.prev.replace(prev));
+    prev.map(|node| node.next.replace(next));
 }
 
 #[cfg(test)]
