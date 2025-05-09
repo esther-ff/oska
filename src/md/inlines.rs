@@ -63,6 +63,7 @@ pub enum Inline {
     SoftBreak,
     HardBreak,
     Text(Text),
+    EscapedChar(char),
 }
 
 impl Inline {

@@ -1,17 +1,14 @@
 use crate::md::{
-    Walker,
-    chars::{ASTERISK, BACKTICK, NEWLINE, UNDERSCORE},
-    inlines::Image,
-    walker::StrRange,
+    Document,
+    blocks::{Block, Parsed, Unparsed},
+    inlines::{EmphasisChar, Image, Inline, Inlines, Text},
+    walker::{StrRange, Walker},
 };
 
-use super::{
-    Block, Document,
-    blocks::{Parsed, Unparsed},
-    inlines::{EmphasisChar, Inline, Inlines, Text},
-};
-
-use core::cell::Cell;
+use core::cell::{Cell, Ref, RefCell, RefMut};
+use core::fmt::Debug;
+use std::ops::Deref;
+use unicode_categories::UnicodeCategories;
 
 /// A trait representing a parser for inline elements
 /// such as emphases or links.
@@ -21,10 +18,111 @@ pub trait InlineParser {
     fn parse_inlines(&mut self, src: &str) -> Inlines;
 }
 
+// Arena for the delimeters
+struct Arena<'a, T> {
+    inner: RefCell<Chunks<T>>,
+    prev: Cell<Option<&'a T>>,
+}
+
+struct Chunks<T> {
+    cur: Vec<T>,
+    rst: Vec<Vec<T>>,
+}
+
+impl<T> Chunks<T> {
+    const START_SIZE: usize = 1024 * 4;
+    fn new() -> Self {
+        assert_ne!(size_of::<T>(), 0);
+
+        Self {
+            cur: Vec::with_capacity(Self::START_SIZE / size_of::<T>()),
+            rst: Vec::new(),
+        }
+    }
+}
+
+impl<'a, T> Arena<'a, T> {
+    fn new() -> Arena<'a, T> {
+        Self {
+            inner: RefCell::new(Chunks::new()),
+            prev: Cell::new(None),
+        }
+    }
+
+    fn previous(&self) -> Option<&'a T> {
+        self.prev.get()
+    }
+
+    fn alloc(&self, item: T) -> &T {
+        let mut chunk = self.inner.borrow_mut();
+        let cur_len = chunk.cur.len();
+
+        let reff = if cur_len < chunk.cur.capacity() {
+            chunk.cur.push(item);
+
+            unsafe { &*chunk.cur.as_ptr().add(cur_len) }
+        } else {
+            let mut new_chunk = Vec::with_capacity(chunk.cur.capacity());
+            new_chunk.push(item);
+            let old_chunk = core::mem::replace(&mut chunk.cur, new_chunk);
+            chunk.rst.push(old_chunk);
+            unsafe { &*chunk.cur.as_ptr() }
+        };
+
+        self.prev.replace(Some(reff));
+
+        reff
+    }
+}
+
+impl<'a, T> Arena<'a, Node<'a, T>> {
+    fn to_list(&'a self, val: T) {
+        let old = self.previous();
+        let new = self.alloc(Node::new(val, None, old));
+
+        if let Some(node) = old {
+            node.next.set(Some(new));
+        }
+    }
+}
+
+struct Node<'a, T> {
+    val: RefCell<T>,
+    prev: Cell<Option<&'a Node<'a, T>>>,
+    next: Cell<Option<&'a Node<'a, T>>>,
+}
+
+impl<'a, T> Node<'a, T> {
+    fn new<A, B>(val: T, next: A, prev: B) -> Self
+    where
+        A: Into<Option<&'a Self>>,
+        B: Into<Option<&'a Self>>,
+    {
+        Node {
+            val: RefCell::new(val),
+            next: Cell::new(next.into()),
+            prev: Cell::new(prev.into()),
+        }
+    }
+}
+
+impl<'a, T: Debug> Debug for Node<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Node")
+            .field("val", &self.val)
+            .field("prev", &self.prev.get())
+            .field("next", &self.prev.get())
+            .finish()
+    }
+}
+
 #[derive(Debug)]
 enum Ability {
     Opener,
     Closer,
+    Both,
+    None,
+    NotImportant,
 }
 
 #[derive(Debug)]
@@ -38,16 +136,37 @@ struct Token {
     // Position
     pos: TokenPos,
 
-    // Next and previous tokens
-    next: Cell<Option<*mut Token>>,
-    prev: Cell<Option<*mut Token>>,
+    // // Next and previous tokens
+    // next: Cell<Option<*mut Token>>,
+    // prev: Cell<Option<*mut Token>>,
 
     // Node it is pointing to
     node: Cell<Option<*mut Inline>>,
 
+    // Whether the token is a closer or opener
     ability: Ability,
 
+    // Whether the token is closed
     closed: bool,
+}
+
+impl Token {
+    fn new(
+        char: &'static str,
+        amount: usize,
+        pos: TokenPos,
+        node: Option<*mut Inline>,
+        ability: Ability,
+    ) -> Self {
+        Self {
+            char,
+            amount,
+            pos,
+            node: Cell::new(node),
+            ability,
+            closed: false,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -66,70 +185,16 @@ impl TokenPos {
     }
 }
 
-fn remove_node(node: *mut Token) {
-    unsafe {
-        let prev = (*node).prev.get();
-        let next = (*node).next.get();
+fn remove_node<'a, T>(node: &Node<'a, T>) {
+    let prev = node.prev.get();
+    let next = node.next.get();
 
-        next.map(|node| (*node).prev.replace(prev));
-        prev.map(|node| (*node).next.replace(next));
-    }
-}
-
-#[derive(Debug)]
-struct TokenContainer {
-    col: Vec<Token>,
-    last: Option<*mut Token>,
-}
-
-impl TokenContainer {
-    fn new() -> Self {
-        Self {
-            col: vec![],
-            last: None,
-        }
-    }
-
-    fn cursor(&mut self) -> Cursor {
-        let ptr = self.col.get_mut(0).map(|x| x as *mut Token);
-        Cursor {
-            list: self,
-            cur: ptr,
-        }
-    }
-
-    fn cursor_last(&mut self) -> Cursor {
-        let ptr = self.col.last_mut().map(|x| x as *mut Token);
-        Cursor {
-            list: self,
-            cur: ptr,
-        }
-    }
-
-    fn last_ptr(&self) -> Option<*mut Token> {
-        self.last
-    }
-
-    fn push_new(&mut self, token: Token) {
-        self.col.push(token);
-        let new_last = self.col.last_mut().map(|x| x as *mut Token);
-        let len = self.col.len();
-
-        if len >= 2 {
-            let old_last = self.col.get_mut(len - 2);
-            match old_last {
-                None => {}
-                Some(inner) => inner.next.set(new_last),
-            }
-        };
-
-        self.last = self.col.last_mut().map(|x| x as *mut Token);
-    }
+    next.map(|node| node.prev.replace(prev));
+    prev.map(|node| node.next.replace(next));
 }
 
 struct Cursor<'a> {
-    list: &'a mut TokenContainer,
-    cur: Option<*mut Token>,
+    cur: Option<&'a Node<'a, Token>>,
 }
 
 impl Cursor<'_> {
@@ -159,65 +224,35 @@ impl Cursor<'_> {
         }
     }
 
-    fn access(&self) -> Option<&Token> {
-        self.cur.map(|x| unsafe { &*x })
+    fn access(&self) -> Option<Ref<'_, Token>> {
+        self.cur.map(|x| x.val.borrow())
     }
 
-    fn access_mut(&mut self) -> Option<&mut Token> {
-        self.cur.map(|x| unsafe { &mut *x })
+    fn access_mut(&mut self) -> Option<RefMut<'_, Token>> {
+        self.cur.map(|x| x.val.borrow_mut())
     }
 
     fn is_end(&self) -> bool {
         if let Some(ptr) = self.cur {
-            unsafe { (*ptr).next.get().is_none() }
+            ptr.next.get().is_none()
         } else {
             false
         }
     }
 }
 
-fn tokenize(tokens: &mut TokenContainer, w: &mut Walker, inl: &mut Vec<Inline>) {
+fn tokenize<'a>(w: &mut Walker, inl: &mut Vec<Inline>, arena: &'a Arena<'a, Node<'a, Token>>) {
     while let Some(char) = w.next() {
         let current_pos = w.position();
         match char as char {
-            '*' => {
-                let amount = w.till_not(ASTERISK) + 1;
-                let end = w.position();
-
-                inl.push(Inline::text(current_pos, end));
-                let ptr = inl.last_mut().map(|x| x as *mut Inline);
-
-                tokens.push_new(Token {
-                    char: "*",
-                    amount,
-                    pos: TokenPos::new(current_pos, end),
-                    closed: false,
-                    prev: Cell::new(tokens.last_ptr()),
-                    next: Cell::new(None),
-                    node: Cell::new(ptr),
-                    ability: Ability::Opener,
-                })
+            '\\' => {
+                if let Some(next) = w.next() {
+                    inl.push(Inline::EscapedChar(next as char))
+                }
             }
 
-            '_' => {
-                let amount = w.till_not(UNDERSCORE) + 1;
-
-                let end = w.position();
-
-                inl.push(Inline::text(current_pos, end));
-                let ptr = inl.last_mut().map(|x| x as *mut Inline);
-                tokens.push_new(Token {
-                    char: "*",
-                    amount,
-                    pos: TokenPos::new(current_pos, w.position()),
-                    closed: false,
-
-                    prev: Cell::new(tokens.last_ptr()),
-                    next: Cell::new(None),
-                    node: Cell::new(ptr),
-
-                    ability: Ability::Opener,
-                })
+            cap @ ('_' | '*') => {
+                find_delims(w, cap as u8, arena, inl);
             }
 
             '[' => {
@@ -226,18 +261,16 @@ fn tokenize(tokens: &mut TokenContainer, w: &mut Walker, inl: &mut Vec<Inline>) 
 
                 inl.push(Inline::text(current_pos, end));
                 let ptr = inl.last_mut().map(|x| x as *mut Inline);
-                tokens.push_new(Token {
-                    char: "[",
-                    amount: 1,
-                    pos: TokenPos::new(current_pos, w.position()),
-                    closed: false,
 
-                    prev: Cell::new(tokens.last_ptr()),
-                    next: Cell::new(None),
-                    node: Cell::new(ptr),
+                let token = Token::new(
+                    "[",
+                    1,
+                    TokenPos::new(current_pos, w.position()),
+                    ptr,
+                    Ability::Opener,
+                );
 
-                    ability: Ability::Opener,
-                })
+                arena.to_list(token);
             }
 
             '!' if w.is_next_char(b'[') => {
@@ -246,21 +279,20 @@ fn tokenize(tokens: &mut TokenContainer, w: &mut Walker, inl: &mut Vec<Inline>) 
 
                 inl.push(Inline::text(current_pos, end));
                 let ptr = inl.last_mut().map(|x| x as *mut Inline);
-                tokens.push_new(Token {
-                    char: "![",
-                    amount: 1,
-                    pos: TokenPos::new(current_pos, w.position()),
-                    closed: false,
 
-                    prev: Cell::new(tokens.last_ptr()),
-                    next: Cell::new(None),
-                    node: Cell::new(ptr),
+                let token_pos = TokenPos::new(current_pos, w.position());
+                let token = Token::new("![", 1, token_pos, ptr, Ability::Opener);
 
-                    ability: Ability::Opener,
-                })
+                arena.to_list(token);
             }
 
-            ']' => link_or_image(w, tokens.cursor_last(), inl),
+            ']' => link_or_image(
+                w,
+                Cursor {
+                    cur: arena.previous(),
+                },
+                inl,
+            ),
 
             _ => {}
         }
@@ -292,7 +324,7 @@ fn determine_whether_link_or_image(dsc: &mut Linkable, val: &str) -> bool {
 
 fn link_or_image(w: &mut Walker, mut cur: Cursor, inl: &mut Vec<Inline>) {
     let was_found;
-    let target: &mut Token;
+    let target: &Node<'_, Token>;
     let mut descriptor = Linkable::None;
 
     loop {
@@ -300,7 +332,7 @@ fn link_or_image(w: &mut Walker, mut cur: Cursor, inl: &mut Vec<Inline>) {
             .access()
             .is_some_and(|node| determine_whether_link_or_image(&mut descriptor, node.char))
         {
-            target = cur.access_mut().expect("infallible, should be present");
+            target = cur.cur.unwrap();
             was_found = true;
             break;
         } else {
@@ -323,7 +355,7 @@ fn link_or_image(w: &mut Walker, mut cur: Cursor, inl: &mut Vec<Inline>) {
             let link_start = w.position();
 
             if w.till(b')').is_some() {
-                let name_start = target.pos.start + descriptor as usize;
+                let name_start = target.val.borrow().pos.start + descriptor as usize;
 
                 let link_end = w.position();
                 let link_name = Inline::text(name_start, initial - 1);
@@ -341,10 +373,10 @@ fn link_or_image(w: &mut Walker, mut cur: Cursor, inl: &mut Vec<Inline>) {
                     vec.push(link_name)
                 }
 
-                if let Some(ptr) = target.node.get() {
-                    unsafe {
+                unsafe {
+                    if let Some(ptr) = target.val.borrow().node.get() {
                         ptr.replace(new);
-                    };
+                    }
                 }
 
                 remove_node(target);
@@ -358,7 +390,118 @@ fn link_or_image(w: &mut Walker, mut cur: Cursor, inl: &mut Vec<Inline>) {
     }
 }
 
-fn handle_delim() {}
+fn find_delims<'a>(
+    w: &mut Walker,
+    ch: u8,
+    arena: &'a Arena<'a, Node<'a, Token>>,
+    inlines: &mut Vec<Inline>,
+) {
+    let pos = w.position() - 1;
+
+    // after and before default to '\n'
+    // because the CommonMark spec specifies
+    // that the end and beginning of a line
+    // are to be treated as Unicode whitespace
+    // '\n' (newline) qualfies to be that.
+    let before = if pos == 0 {
+        '\n'
+    } else {
+        let mut before_pos = pos - 1;
+
+        while before_pos > 0 && !(w.data()[before_pos] >> 6 == 2) {
+            before_pos -= 1;
+        }
+
+        // dbg!(before_pos);
+
+        // dbg!(w.get(before_pos, pos));
+
+        w.get(before_pos, pos).chars().rev().next().unwrap_or('\n')
+    };
+
+    let amount = w.till_not(ch) + 1;
+    let pos = w.position();
+
+    let after = if w.peek(0).is_none() {
+        '\n'
+    } else {
+        let mut after_pos = pos;
+
+        while after_pos < w.data().len() - 1 {
+            after_pos += 1;
+        }
+
+        // dbg!(w.get(pos, after_pos));
+
+        w.get(pos, after_pos)
+            .chars()
+            .next()
+            .map_or('\n', |ch| if (ch as usize) > 256 { '\n' } else { ch })
+    };
+
+    // dbg!((after, before));
+
+    //                  1. NOT followed by a Unicode whitespace
+    let left_flanking = !after.is_whitespace()
+        // 2a - either NOT followed by a Unicode punctuation
+        && !after.is_punctuation() ||
+            // 2b - followed by Unicode punctuation and preceded by either Unicode whitespace or punctuation.
+            (after.is_punctuation() && (before.is_whitespace() || before.is_punctuation()));
+
+    //                  1. NOT preceded by Unicode whitespace
+    let right_flanking = !before.is_whitespace()
+        // 2a - either NOT preceded by Unicode punctuation
+        && !before.is_punctuation() ||
+            // 2b - preceded by Unicode punctuation and followed by either Unicode whitespace or punctuation.
+            (before.is_punctuation() && (after.is_whitespace() || after.is_punctuation()));
+
+    // dbg!((left_flanking, right_flanking));
+
+    let ability = match ch as char {
+        '*' => {
+            if left_flanking {
+                Ability::Opener
+            } else if right_flanking {
+                Ability::Closer
+            } else if right_flanking && left_flanking {
+                Ability::Both
+            } else {
+                Ability::None
+            }
+        }
+
+        '_' => {
+            if left_flanking && (!right_flanking || (right_flanking && before.is_punctuation())) {
+                Ability::Opener
+            } else if right_flanking
+                && (!left_flanking || (left_flanking && after.is_punctuation()))
+            {
+                Ability::Closer
+            } else {
+                Ability::None
+            }
+        }
+
+        _ => unreachable!(),
+    };
+
+    let delim: &'static str = match ch as char {
+        '*' => "*",
+        '_' => "_",
+
+        _ => unreachable!(),
+    };
+
+    inlines.push(Inline::text(pos, w.position()));
+
+    arena.to_list(Token::new(
+        delim,
+        amount,
+        TokenPos::new(pos, w.position()),
+        inlines.last_mut().map(|x| x as *mut Inline),
+        ability,
+    ));
+}
 
 fn process_emphasis(last: Option<*mut Token>, node: *mut Token, bottom: usize) {
     let mut pos = 0;
@@ -374,10 +517,21 @@ impl InlineParser for DefInlineParser {
     fn parse_inlines(&mut self, src: &str) -> Inlines {
         let mut inl = Inlines::new();
         let mut walker = Walker::new(src);
-        let mut tokens = TokenContainer::new();
+        let arena = Arena::new();
 
-        tokenize(&mut tokens, &mut walker, inl.inner());
-        let mut cursor = tokens.cursor();
+        tokenize(&mut walker, inl.inner(), &arena);
+
+        let mut last = arena.previous();
+
+        loop {
+            match last {
+                Some(val) => {
+                    println!("{:#?}", val.val);
+                    last = val.prev.get();
+                }
+                None => break,
+            }
+        }
 
         dbg!(&inl);
         inl
@@ -406,106 +560,3 @@ mod tests {
         let mut inl = parser.parse_inlines(data);
     }
 }
-
-// if delim.char == NEWLINE {
-//                 inl.add(Inline::SoftBreak);
-//                 continue;
-//             }
-
-//             let next_delim = match delim_iter.next() {
-//                 Some(val) => val,
-//                 None => break,
-//             };
-
-//             if delim.char == next_delim.char {
-//                 if delim.amnt % 2 == 0 {
-//                     let emph = if delim.amnt == usize::from(next_delim.amnt) {
-//                         Inline::emph(
-//                             true,
-//                             EmphasisChar::from_u8(delim.char)
-//                                 .expect("this char should always be an asterisk or underscore"),
-//                             Inline::text(delim.pos.1, next_delim.pos.0 - 1),
-//                         )
-//                     } else {
-//                         let emph_inner = Inline::emph(
-//                             true,
-//                             EmphasisChar::from_u8(delim.char)
-//                                 .expect("this char should always be an asterisk or underscore"),
-//                             Inline::text(delim.pos.1 + 1, next_delim.pos.0),
-//                         );
-
-//                         Inline::emph(
-//                             false,
-//                             EmphasisChar::from_u8(delim.char).unwrap(),
-//                             emph_inner,
-//                         )
-//                     };
-
-//                     inl.add(emph)
-//                 } else {
-//                     //
-//                 }
-//             }
-// fn parse_one_inline(
-//     &mut self,
-//     slice: &mut [Delim],
-//     old: (usize, usize),
-//     inl: &mut Vec<Inline>,
-//     inner: bool,
-// ) -> bool {
-//     let mut iter = slice
-//         .iter_mut()
-//         .filter(|x| x.binding != Binding::Closed)
-//         .enumerate();
-
-//     match iter.next() {
-//         None => return false,
-//         Some((first_index, val)) => {
-//             dbg!(&val);
-//             if val.char == '\n' {
-//                 val.binding = Binding::Closed;
-//                 inl.push(Inline::soft_break());
-//                 return true;
-//             }
-
-//             while let Some((index, delim)) = iter.next() {
-//                 if val.amnt == delim.amnt {
-//                     if val.char == delim.char {
-//                         let char = match delim.char {
-//                             '*' => EmphasisChar::Asterisk,
-//                             '_' => EmphasisChar::Underscore,
-//                             _ => panic!("invalid"),
-//                         };
-
-//                         val.close();
-//                         delim.close();
-
-//                         let pos = (val.pos.0 + val.amnt, delim.pos.1 - delim.amnt);
-
-//                         let mut emph = Inline::emph(val.amnt > 1, char);
-
-//                         dbg!(&mut slice[first_index..index]);
-//                         self.parse_one_inline(
-//                             &mut slice[first_index..index],
-//                             pos,
-//                             emph.expose_inlines().unwrap(),
-//                             true,
-//                         );
-
-//                         inl.push(emph);
-
-//                         return true;
-//                     }
-//                 } else {
-//                     delim.close();
-//                 }
-//             }
-
-//             println!("cannons");
-//             val.close();
-//             inl.push(Inline::text(val.pos.0, val.pos.1 + 1))
-//         }
-//     };
-
-//     true
-// }

@@ -288,6 +288,12 @@ impl<'w> Walker<'w> {
     }
 }
 
+pub(crate) fn is_general_punctuation(victim: char) -> bool {
+    let num = victim as usize;
+
+    num >= 0x2000 && num <= 0x206F
+}
+
 #[cfg(test)]
 mod tests {
     use super::Walker;
