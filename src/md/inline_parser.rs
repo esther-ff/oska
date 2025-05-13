@@ -1,5 +1,6 @@
 use crate::md::{
     Document,
+    arena::{Arena, Node, NodeRef},
     blocks::{Block, Parsed, Unparsed},
     inlines::{EmphasisChar, Image, Inline, Inlines, Text},
     walker::{StrRange, Walker},
@@ -22,11 +23,11 @@ pub struct DefInlineParser;
 
 impl InlineParser for DefInlineParser {
     fn parse_inlines(&mut self, src: &str) -> Inlines {
-        let mut inl = Inlines::new();
+        let inl = Inlines::new();
         let mut walker = Walker::new(src);
         let arena = Arena::new();
 
-        tokenize(&mut walker, inl.inner(), &arena);
+        tokenize(&mut walker, &inl, &arena);
 
         let mut last = arena.previous();
 
@@ -48,104 +49,6 @@ impl InlineParser for DefInlineParser {
     }
 }
 
-// Arena for the delimeters
-struct Arena<'a, T> {
-    inner: RefCell<Chunks<T>>,
-    prev: Cell<Option<&'a T>>,
-}
-
-struct Chunks<T> {
-    cur: Vec<T>,
-    rst: Vec<Vec<T>>,
-}
-
-impl<T> Chunks<T> {
-    const START_SIZE: usize = 1024 * 4;
-    fn new() -> Self {
-        assert_ne!(size_of::<T>(), 0);
-
-        Self {
-            cur: Vec::with_capacity(Self::START_SIZE / size_of::<T>()),
-            rst: Vec::new(),
-        }
-    }
-}
-
-impl<'a, T> Arena<'a, T> {
-    fn new() -> Arena<'a, T> {
-        Self {
-            inner: RefCell::new(Chunks::new()),
-            prev: Cell::new(None),
-        }
-    }
-
-    fn previous(&self) -> Option<&'a T> {
-        self.prev.get()
-    }
-
-    fn alloc(&self, item: T) -> &T {
-        let mut chunk = self.inner.borrow_mut();
-        let cur_len = chunk.cur.len();
-
-        let reff = if cur_len < chunk.cur.capacity() {
-            chunk.cur.push(item);
-
-            unsafe { &*chunk.cur.as_ptr().add(cur_len) }
-        } else {
-            let mut new_chunk = Vec::with_capacity(chunk.cur.capacity());
-            new_chunk.push(item);
-            let old_chunk = core::mem::replace(&mut chunk.cur, new_chunk);
-            chunk.rst.push(old_chunk);
-            unsafe { &*chunk.cur.as_ptr() }
-        };
-
-        self.prev.replace(Some(reff));
-
-        reff
-    }
-}
-
-impl<'a, T> Arena<'a, Node<'a, T>> {
-    fn to_list(&'a self, val: T) {
-        let old = self.previous();
-        let new = self.alloc(Node::new(val, None, old));
-
-        if let Some(node) = old {
-            node.next.set(Some(new));
-        }
-    }
-}
-
-struct Node<'a, T> {
-    val: RefCell<T>,
-    prev: Cell<Option<&'a Node<'a, T>>>,
-    next: Cell<Option<&'a Node<'a, T>>>,
-}
-
-impl<'a, T> Node<'a, T> {
-    fn new<A, B>(val: T, next: A, prev: B) -> Self
-    where
-        A: Into<Option<&'a Self>>,
-        B: Into<Option<&'a Self>>,
-    {
-        Node {
-            val: RefCell::new(val),
-            next: Cell::new(next.into()),
-            prev: Cell::new(prev.into()),
-        }
-    }
-}
-
-impl<T: Debug> Debug for Node<'_, T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Node")
-            .field("val", &self.val)
-            .field("prev", &self.prev.get())
-            .field("next", &self.prev.get())
-            .finish()
-    }
-}
-
 #[derive(Debug)]
 enum Ability {
     Opener,
@@ -156,7 +59,7 @@ enum Ability {
 }
 
 #[derive(Debug)]
-struct Token {
+struct Token<'a> {
     // Delimiter of the token
     char: &'static str,
 
@@ -167,7 +70,7 @@ struct Token {
     pos: TokenPos,
 
     // Node it is pointing to
-    node: Cell<Option<*mut Inline>>,
+    node: &'a Node<'a, Inline>,
 
     // Whether the token is a closer or opener
     ability: Ability,
@@ -182,22 +85,30 @@ struct TokenPos {
     end: usize,
 }
 
-impl Token {
+impl<'a> Token<'a> {
     fn new(
         char: &'static str,
         amount: usize,
         pos: TokenPos,
-        node: Option<*mut Inline>,
+        node: &'a Node<'a, Inline>,
         ability: Ability,
     ) -> Self {
         Self {
             char,
             amount,
             pos,
-            node: Cell::new(node),
+            node,
             ability,
             closed: false,
         }
+    }
+
+    fn can_close(&self) -> bool {
+        matches!(self.ability, Ability::Closer | Ability::Both)
+    }
+
+    fn can_open(&self) -> bool {
+        matches!(self.ability, Ability::Closer | Ability::Both)
     }
 }
 
@@ -212,10 +123,10 @@ impl TokenPos {
 }
 
 struct Cursor<'a> {
-    cur: Option<&'a Node<'a, Token>>,
+    cur: Option<&'a Node<'a, Token<'a>>>,
 }
 
-impl Cursor<'_> {
+impl<'a> Cursor<'a> {
     fn next(&mut self) -> bool {
         match self.cur {
             Some(ptr) => match ptr.next.get() {
@@ -242,11 +153,11 @@ impl Cursor<'_> {
         }
     }
 
-    fn access(&self) -> Option<Ref<'_, Token>> {
+    fn access(&'a self) -> Option<Ref<'a, Token<'a>>> {
         self.cur.map(|x| x.val.borrow())
     }
 
-    fn access_mut(&mut self) -> Option<RefMut<'_, Token>> {
+    fn access_mut(&'a mut self) -> Option<RefMut<'a, Token<'a>>> {
         self.cur.map(|x| x.val.borrow_mut())
     }
 
@@ -259,13 +170,17 @@ impl Cursor<'_> {
     }
 }
 
-fn tokenize<'a>(w: &mut Walker, inl: &mut Vec<Inline>, arena: &'a Arena<'a, Node<'a, Token>>) {
+fn tokenize<'a>(
+    w: &mut Walker,
+    inl: &'a Inlines<'a, '_>,
+    arena: &'a Arena<'a, Node<'a, Token<'a>>>,
+) {
     while let Some(char) = w.next() {
         let current_pos = w.position();
         match char as char {
             '\\' => {
                 if let Some(next) = w.next() {
-                    inl.push(Inline::EscapedChar(next as char))
+                    inl.add(Inline::EscapedChar(next as char));
                 }
             }
 
@@ -277,8 +192,7 @@ fn tokenize<'a>(w: &mut Walker, inl: &mut Vec<Inline>, arena: &'a Arena<'a, Node
                 w.till_not(b'[');
                 let end = w.position();
 
-                inl.push(Inline::text(current_pos, end));
-                let ptr = inl.last_mut().map(|x| x as *mut Inline);
+                let ptr = inl.add(Inline::text(current_pos, end));
 
                 let token = Token::new(
                     "[",
@@ -295,8 +209,7 @@ fn tokenize<'a>(w: &mut Walker, inl: &mut Vec<Inline>, arena: &'a Arena<'a, Node
                 w.advance(1);
                 let end = w.position();
 
-                inl.push(Inline::text(current_pos, end));
-                let ptr = inl.last_mut().map(|x| x as *mut Inline);
+                let ptr = inl.add(Inline::text(current_pos, end));
 
                 let token_pos = TokenPos::new(current_pos, w.position());
                 let token = Token::new("![", 1, token_pos, ptr, Ability::Opener);
@@ -340,7 +253,7 @@ fn determine_whether_link_or_image(dsc: &mut Linkable, val: &str) -> bool {
     }
 }
 
-fn link_or_image(w: &mut Walker, mut cur: Cursor, inl: &mut Vec<Inline>) {
+fn link_or_image(w: &mut Walker, mut cur: Cursor, inl: &mut Inlines) {
     let was_found;
     let target: &Node<'_, Token>;
     let mut descriptor = Linkable::None;
@@ -362,7 +275,7 @@ fn link_or_image(w: &mut Walker, mut cur: Cursor, inl: &mut Vec<Inline>) {
     let fail_end = w.position() + 1;
 
     if !was_found {
-        inl.push(Inline::text(fail_start, fail_end));
+        inl.add(Inline::text(fail_start, fail_end));
         return;
     }
 
@@ -391,11 +304,13 @@ fn link_or_image(w: &mut Walker, mut cur: Cursor, inl: &mut Vec<Inline>) {
                     vec.push(link_name)
                 }
 
-                unsafe {
-                    if let Some(ptr) = target.val.borrow().node.get() {
-                        ptr.replace(new);
-                    }
-                }
+                // unsafe {
+                //     if let Some(ptr) = target.val.borrow().node.val.borrow_mut() {
+                //         *ptr = new
+                //     }
+                // }
+
+                *target.val.borrow().node.val.borrow_mut() = new;
 
                 remove_node(target);
             }
@@ -412,7 +327,7 @@ fn find_delims<'a>(
     w: &mut Walker,
     ch: u8,
     arena: &'a Arena<'a, Node<'a, Token>>,
-    inlines: &mut Vec<Inline>,
+    inlines: &mut Inlines,
 ) {
     let pos = w.position() - 1;
 
@@ -519,9 +434,46 @@ fn find_delims<'a>(
     ));
 }
 
-fn process_emphasis(last: Option<*mut Token>, node: *mut Token, bottom: usize) {
+fn process_emphasis<'a>(arena: &'a Arena<'a, Node<'a, Token>>, bottom: usize) {
     let mut pos = 0;
-    let mut openers_bottom: [usize; 2] = [bottom; 2];
+    let mut openers_bottom: [usize; 12] = [bottom; 12];
+
+    let mut cand = arena.previous();
+    let mut closer = None;
+
+    while cand.map_or(false, |x| x.val.borrow().pos.start >= bottom) {
+        closer = cand;
+        cand = cand.unwrap().prev.get();
+    }
+
+    while let Some(rightside) = closer {
+        let val = rightside.val.borrow();
+
+        if val.can_close() {
+            let index = match val.char {
+                "_" => 1,
+                "*" => 8 + val.can_open() as usize + val.amount % 3,
+
+                _ => unreachable!("not finished yet"),
+            };
+
+            let mut found_opener = false;
+            let mut potential_opener = rightside.prev.get();
+
+            while potential_opener
+                .map_or(false, |x| x.val.borrow().pos.start >= openers_bottom[index])
+            {
+                let inner = potential_opener.unwrap().val.borrow();
+
+                if (inner.char == val.char) && inner.can_open() {
+                    found_opener = true;
+                    let strong_emphasis = inner.amount >= 2 && val.amount >= 2;
+                }
+            }
+        } else {
+            todo!()
+        }
+    }
 }
 
 fn remove_node<T>(node: &Node<T>) {

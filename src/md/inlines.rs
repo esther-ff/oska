@@ -1,21 +1,35 @@
+use super::arena::{Arena, Node};
 use super::walker::StrRange;
+use core::cell::Cell;
 
 #[derive(Debug)]
-pub struct Inlines {
-    list: Vec<Inline>,
+pub struct Inlines<'a, 'b>
+where
+    'a: 'b,
+{
+    arena: Arena<'a, Node<'b, Inline>>,
+    first: Cell<Option<&'a Node<'b, Inline>>>,
 }
 
-impl Inlines {
+impl<'a, 'b> Inlines<'a, 'b>
+where
+    'a: 'b,
+{
     pub fn new() -> Self {
-        Self { list: Vec::new() }
+        Self {
+            arena: Arena::new(),
+            first: Cell::new(None),
+        }
     }
 
-    pub fn add(&mut self, item: Inline) {
-        self.list.push(item);
-    }
+    pub fn add(&'a mut self, item: Inline) -> &'a Node<'b, Inline> {
+        let val = self.arena.to_list(item);
 
-    pub fn inner(&mut self) -> &mut Vec<Inline> {
-        &mut self.list
+        if self.first.get().is_none() {
+            self.first.set(Some(val));
+        };
+
+        val
     }
 
     // pub fn iter_values<'a, 'b>(&'b mut self, data: &'a str) -> impl IntoIterator<Item = &'a str>
@@ -46,7 +60,7 @@ impl Inlines {
     // }
 }
 
-impl Default for Inlines {
+impl Default for Inlines<'_, '_> {
     fn default() -> Self {
         Self::new()
     }

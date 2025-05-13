@@ -1,3 +1,5 @@
+mod arena;
+mod ast;
 mod chars;
 mod html_constants;
 
