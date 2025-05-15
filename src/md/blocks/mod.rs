@@ -6,6 +6,8 @@ pub mod lists;
 pub mod paragraph;
 pub mod style_break;
 
+use crate::lib::{String, Vec};
+
 pub(crate) mod utils;
 
 use core::marker::PhantomData;
