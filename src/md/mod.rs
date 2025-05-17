@@ -2,6 +2,7 @@ mod arena;
 mod ast;
 mod chars;
 mod html_constants;
+mod tree;
 
 pub mod inline_parser;
 pub mod inlines;
