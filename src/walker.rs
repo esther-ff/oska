@@ -47,7 +47,7 @@ impl StrRange {
 
 impl<'w> Walker<'w> {
     /// Creates a new `Walker`
-    pub(crate) fn new(data: &'w str) -> Self {
+    pub fn new(data: &'w str) -> Self {
         Self {
             last: None,
             position: 0,
@@ -113,15 +113,13 @@ impl<'w> Walker<'w> {
         Some(val)
     }
 
-    /// Goes `teps` of characters back
-    pub(crate) fn back(&mut self, steps: usize) -> Option<u8> {
+    /// Goes `steps` steps of characters back
+    pub(crate) fn peek_back(&mut self, steps: usize) -> Option<u8> {
         if (self.position + steps > self.len) | (steps > self.len) {
             return None;
         }
 
-        self.position -= steps;
-
-        Some(self.data[self.position])
+        Some(self.data[self.position - steps])
     }
 
     /// Peeks `chars` forward
@@ -159,6 +157,11 @@ impl<'w> Walker<'w> {
     /// Returns the remainder of bytes
     pub(crate) fn remaining(&self) -> usize {
         self.data.len() - self.position()
+    }
+
+    /// Checks if the walker is at the end
+    pub(crate) fn end(&self) -> bool {
+        self.position() > self.data().len()
     }
 
     /// Executes the given closure, using the next character as an argument
@@ -305,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn back() {
+    fn peek_back() {
         let text = "ABC";
 
         let mut w = Walker::new(text);
@@ -314,7 +317,7 @@ mod tests {
 
         assert!(w.next().unwrap() == b'B');
 
-        assert!(w.back(1).unwrap() == b'B');
+        assert!(w.peek_back(1).unwrap() == b'B');
     }
 
     #[test]
