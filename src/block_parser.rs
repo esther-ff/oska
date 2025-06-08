@@ -62,8 +62,20 @@ impl Parser {
 
                         if blank && is_next_blank && num < 7 {
                             w.advance(1); // blank space after `#`s
-
                             self.heading_size = num as u8;
+
+                            let pos = Position::new(pos_before_state_change, w.position() - 1);
+                            let heading = AstNode::new(
+                                Value::Heading {
+                                    level: NonZero::new(self.heading_size)
+                                        .expect("heading_size should be >0"),
+                                    atx: true,
+                                },
+                                pos,
+                                self.new_id(),
+                            );
+
+                            self.tree.attach_node(heading);
                             self.state = State::AtxHeading;
                             pos_before_state_change = w.position();
                         }
@@ -98,28 +110,16 @@ impl Parser {
 
                     State::AtxHeading => {
                         if any == '\n' || w.peek(1).is_none() {
-                            let pos = Position::new(pos_before_state_change, w.position() + 1);
+                            let pos = Position::new(pos_before_state_change, w.position());
                             dbg!(pos);
-                            let heading = AstNode::new(
-                                Value::Heading {
-                                    level: NonZero::new(self.heading_size)
-                                        .expect("heading_size should be >0"),
-                                    atx: true,
-                                },
-                                pos,
-                                self.new_id(),
-                            );
-
-                            let text = AstNode::new(Value::Text, pos, self.new_id());
-
-                            self.tree.attach_node(heading);
 
                             let _ = self.tree.go_down();
 
+                            let text = AstNode::new(Value::Text, pos, self.new_id());
                             self.tree.attach_node(text);
 
                             self.state = State::Paragraph;
-                            pos_before_state_change = w.position();
+                            pos_before_state_change = w.position() + 1;
                         }
 
                         w.advance(1);
@@ -151,7 +151,7 @@ mod tests {
             dbg!(value);
             let val = value.as_str(self.0);
 
-            println!("{:#?}: {val}\n", value.value());
+            println!("{:#?}: [{val}]\n", value.value());
         }
     }
 
