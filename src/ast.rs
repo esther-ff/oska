@@ -148,8 +148,8 @@ pub enum Value {
 /// source data.
 #[derive(Clone, Copy)]
 pub struct Position {
-    start: usize,
-    end: usize,
+    pub start: usize,
+    pub end: usize,
 }
 
 impl Debug for Position {
@@ -163,6 +163,7 @@ impl Debug for Position {
 }
 
 impl Position {
+    pub const ZERO_ZERO: Position = Position { start: 0, end: 0 };
     /// Creates a new `Position`
     pub fn new(start: usize, end: usize) -> Self {
         Self { start, end }
@@ -183,8 +184,8 @@ impl Position {
 
 /// AST Node of a Markdown document
 pub struct AstNode {
-    value: Value,
-    pos: Position,
+    pub value: Value,
+    pub pos: Position,
     id: usize,
 }
 

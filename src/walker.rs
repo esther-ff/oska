@@ -77,6 +77,11 @@ impl<'w> Walker<'w> {
         self.data
     }
 
+    /// Returns data as a `&str`
+    pub(crate) fn data_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(self.data()) }
+    }
+
     /// Returns section of data between `initial` and `self.position()`
     pub(crate) fn string_from_offset(&self, initial: usize) -> &str {
         debug_assert!(

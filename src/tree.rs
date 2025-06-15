@@ -5,8 +5,6 @@ use core::num::NonZero;
 
 extern crate std;
 
-pub type NodeAst = Node<AstNode>;
-
 #[cfg(target_pointer_width = "32")]
 type Index = u16;
 
@@ -25,13 +23,11 @@ pub struct NodeId {
 }
 
 impl NodeId {
-    const HALF_PTR_WIDTH: usize = (size_of::<usize>() / 2);
-
     #[cfg(target_pointer_width = "32")]
-    const MASK: usize = (2_usize.pow(Self::HALF_PTR_WIDTH as u16) << 16) - 1;
+    const MASK: usize = (2_usize.pow((size_of::<usize>() / 2) as u16) << 16) - 1;
 
     #[cfg(target_pointer_width = "64")]
-    const MASK: usize = (2_usize.pow(Self::HALF_PTR_WIDTH as u32) << 32) - 1;
+    const MASK: usize = (2_usize.pow((size_of::<usize>() / 2) as u32) << 32) - 1;
 
     pub fn new(val: usize) -> Option<Self> {
         if val & Self::MASK == 0 {
@@ -86,14 +82,6 @@ impl<T: Debug> Debug for Node<T> {
 }
 
 impl<T> Node<T> {
-    pub fn new(data: T) -> Node<T> {
-        Self {
-            data,
-            child: None,
-            next: None,
-        }
-    }
-
     pub fn next_node(&mut self) -> Option<&mut NodeId> {
         self.next.as_mut()
     }
@@ -125,7 +113,7 @@ pub struct TreeArena<T> {
 
     /// Stores the `NodeId`s pointing to nodes
     /// as a path to the current node
-    right_edge: Vec<NodeId>,
+    pub right_edge: Vec<NodeId>,
 
     /// Stores `Node`s inside
     /// the tree structure.
@@ -283,13 +271,25 @@ impl<T> TreeArena<T> {
         self.tracker
     }
 
+    #[inline]
+    pub fn cursor(&self) -> Option<NodeId> {
+        self.cursor
+    }
+
+    #[inline]
+    pub fn right_edge(&self) -> &[NodeId] {
+        &self.right_edge
+    }
+
     pub fn attach_node(&mut self, item: T) -> NodeId {
         let ix = self.isolated_node(item);
-        dbg!(&self.right_edge);
+        dbg!(self.cursor);
+
         if let Some(cur) = self.cursor {
-            println!("meow");
+            println!("We are adding an item!");
             self.get_mut(cur).unwrap().next = Some(ix)
         } else if let Some(&parent) = self.right_edge.last() {
+            println!("ceux de kleber");
             self.get_mut(parent).unwrap().child = Some(ix)
         }
 
@@ -310,33 +310,13 @@ impl<T> TreeArena<T> {
         self.right_edge.push(ix);
 
         self.cursor = self.get(ix).and_then(|x| x.child);
+
+        dbg!(self.get(ix).and_then(|x| x.child));
         ix
     }
 
-    pub fn attach_child(&mut self, data: T) -> NodeId {
-        let ix = self.isolated_node(data);
-
-        match self.cursor {
-            None => {}
-
-            Some(prev_cur) => unsafe { self.get_unchecked_mut(prev_cur).child = Some(ix) },
-        }
-
-        self.cursor = Some(ix);
-        ix
-    }
-
-    pub fn attach_next(&mut self, data: T) -> NodeId {
-        let ix = self.isolated_node(data);
-
-        match self.cursor {
-            None => {}
-
-            Some(prev_cur) => unsafe { self.get_unchecked_mut(prev_cur).next = Some(ix) },
-        }
-
-        self.cursor = Some(ix);
-        ix
+    pub fn go_to_last_spine(&mut self) {
+        self.cursor = self.right_edge.last().copied();
     }
 
     fn isolated_node(&mut self, data: T) -> NodeId {
@@ -395,7 +375,7 @@ impl<T> TreeArena<T> {
 }
 
 impl TreeArena<AstNode> {
-    pub fn preorder_visit<V>(&self, visitor: &V)
+    pub fn preorder_visit<V>(&self, visitor: &mut V)
     where
         V: Visitor,
     {
@@ -408,7 +388,7 @@ impl TreeArena<AstNode> {
         );
     }
 
-    fn inner_preorder<V>(&self, node: Option<NodeId>, visitor: &V)
+    fn inner_preorder<V>(&self, node: Option<NodeId>, visitor: &mut V)
     where
         V: Visitor,
     {
@@ -453,7 +433,7 @@ impl TreeArena<AstNode> {
 }
 
 pub trait Visitor {
-    fn visit_node(&self, value: &AstNode);
+    fn visit_node(&mut self, value: &AstNode);
 }
 
 pub trait MutVisitor {

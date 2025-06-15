@@ -1,5 +1,5 @@
 // #![no_std]
-
+#![warn(clippy::all)]
 extern crate alloc;
 
 pub(crate) mod lib {

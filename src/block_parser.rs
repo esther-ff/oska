@@ -1,193 +1,320 @@
-#![warn(clippy::all)]
-use super::ast::{AstNode, Position, Value};
-use super::tree::{NodeAst, TreeArena, Visitor};
-use crate::walker::Walker;
+use crate::{
+    ast::{AstNode, Position, Value},
+    tree::{NodeId, TreeArena},
+};
 use core::num::NonZero;
 
-enum State {
-    Paragraph,
-    AtxHeading,
-    SetextHeading,
-    BulletList,
-    OrderedList,
-    BlockQuote,
-    Code(u8),
-    IndentedCode,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self::Paragraph
-    }
-}
-
-pub struct Parser {
-    state: State,
+struct CompileCx<'a> {
     tree: TreeArena<AstNode>,
-    id: usize,
+    text: &'a str,
 
-    heading_size: u8,
+    /// Amount of consumed bytes from the input
+    /// used for positioning
+    consumed: usize,
+
+    /// Beginning of the still-yet-to-be consumed
+    /// part of the input
+    beginning: usize,
+
+    ordered_list_index: Option<usize>,
+
+    bullet_list_marker: Option<u8>,
+    bullet_list_origin: Option<NodeId>,
+    inside_bullet_list: bool,
 }
 
-impl Parser {
-    pub fn new() -> Self {
-        Self {
-            state: State::default(),
-            tree: TreeArena::new(),
-            id: 0,
+impl<'a> CompileCx<'a> {
+    fn run(mut self) -> TreeArena<AstNode> {
+        while self.consumed < self.text.len() {
+            self.parse(&self.text.as_bytes()[self.consumed..])
+        }
 
-            heading_size: 0,
+        while !self.tree.right_edge().is_empty() {
+            let _ = self.tree.go_up();
+        }
+
+        self.tree
+    }
+
+    fn pop_containers(&mut self) {
+        let i = self.count_containers_to_current_node();
+        let len = self.tree.right_edge().len();
+
+        for _ in i..len {
+            let id = self.tree.go_up();
         }
     }
 
-    pub fn new_id(&mut self) -> usize {
-        self.id += 1;
+    fn parse(&mut self, bytes: &[u8]) {
+        self.pop_containers();
 
-        self.id
+        if let Some((bullet_list_start, bullet_list_char)) = self.scan_bullet_list(bytes) {
+            if self.bullet_list_origin.is_none() {
+                let node = AstNode::new(
+                    Value::BulletList { tight: false },
+                    Position::new(self.consumed, 0),
+                    0,
+                );
+
+                self.inside_bullet_list = true;
+
+                self.bullet_list_origin.replace(self.tree.attach_node(node));
+                self.tree.go_down();
+            }
+
+            self.parse_bullet_list(&bytes[bullet_list_start..]);
+            self.consumed += bullet_list_start;
+        }
+
+        if let Some(heading_end) = self.scan_atx_heading(bytes) {
+            self.end_bullet_list();
+
+            let node = AstNode::new(
+                Value::Heading {
+                    level: NonZero::new(heading_end as u8 - 1).expect("value was 0"),
+                    atx: true,
+                },
+                Position::new(self.consumed, self.consumed + heading_end),
+                0,
+            );
+
+            self.tree.attach_node(node);
+            self.tree.go_down();
+
+            self.consumed += heading_end;
+            self.parse_atx_heading(&bytes[heading_end..], heading_end);
+
+            self.tree.go_up();
+            return;
+        }
+
+        self.parse_paragraph(bytes);
     }
 
-    pub fn preorder<V: Visitor>(&self, v: &V) {
-        self.tree.preorder_visit(v)
+    fn parse_paragraph(&mut self, bytes: &[u8]) {
+        let mut ix = 0;
+
+        while ix < bytes.len() {
+            if self.interrupt_paragraph(&bytes[ix..]) {
+                break;
+            } else if bytes[ix] == b'\n' && bytes.get(ix + 1).is_some_and(|x| x == &b'\n') {
+                ix += 2;
+                break;
+            };
+
+            ix += 1;
+        }
+
+        if ix == 0 {
+            return;
+        }
+
+        let pos = Position::new(self.consumed, self.consumed + ix);
+        let node = AstNode::new(crate::ast::Value::Paragraph, pos, 0);
+
+        self.tree.attach_node(node);
+
+        self.tree.go_down();
+        self.tree.attach_node(AstNode::new(Value::Text, pos, 0));
+
+        self.tree.go_up();
+
+        self.consumed += ix;
     }
 
-    pub fn parse(&mut self, w: &mut Walker<'_>) {
-        let mut pos_before_state_change = 0;
-        while let Some(value) = w.peek(0) {
-            match value as char {
-                '#' => match self.state {
-                    State::Paragraph => {
-                        let blank = w.position() == 0 || w.peek_back(1) == Some(b'\n');
-                        let num = w.till_not(b'#');
-                        let is_next_blank = w.is_next_char(b' ');
+    fn interrupt_paragraph(&self, bytes: &[u8]) -> bool {
+        self.scan_bullet_list(bytes).is_some() || self.scan_atx_heading(bytes).is_some()
+    }
 
-                        if blank && is_next_blank && num < 7 {
-                            w.advance(1); // blank space after `#`s
-                            self.heading_size = num as u8;
+    fn parse_atx_heading(&mut self, bytes: &[u8], heading_end: usize) {
+        let mut ix = heading_end;
+        while bytes.get(ix).copied().is_some_and(|byte| byte != b'\n') {
+            ix += 1;
+        }
 
-                            let pos = Position::new(pos_before_state_change, w.position() - 1);
-                            let heading = AstNode::new(
-                                Value::Heading {
-                                    level: NonZero::new(self.heading_size)
-                                        .expect("heading_size should be >0"),
-                                    atx: true,
-                                },
-                                pos,
-                                self.new_id(),
-                            );
+        let node = AstNode::new(
+            Value::Text,
+            Position::new(self.consumed, self.consumed + ix),
+            0,
+        );
 
-                            self.tree.attach_node(heading);
-                            self.state = State::AtxHeading;
-                            pos_before_state_change = w.position();
-                        }
-                    }
+        self.consumed += ix;
 
-                    _ => todo!(),
-                },
+        self.tree.go_up();
+        self.tree.attach_node(node);
+    }
 
-                any => match self.state {
-                    State::Paragraph => {
-                        if (any == '\n' && w.peek(1) == Some(b'\n')) || w.peek(1).is_none() {
-                            let pos = Position::new(pos_before_state_change, w.position() + 1);
-                            let para = AstNode::new(Value::Paragraph, pos, self.new_id());
+    // if it scans an atx heading
+    // it will go down one node
+    // so the function parsing the text
+    // has to go back up again
+    fn scan_atx_heading(&self, data: &[u8]) -> Option<usize> {
+        let mut ix = 0;
 
-                            let text = AstNode::new(Value::Text, pos, self.new_id());
+        while data.get(ix).copied().is_some_and(|byte| byte == b'#') {
+            println!("meow");
+            ix += 1;
+        }
 
-                            self.tree.attach_node(para);
+        if ix == 0
+            || ix > 6
+            || data.get(ix).is_none()
+            || data.get(ix).copied().is_some_and(|x| x != b' ')
+        {
+            return None;
+        }
 
-                            let _ = self.tree.go_down();
+        // consume all the white space
+        while data.get(ix).copied().is_some_and(|byte| byte == b' ') {
+            ix += 1;
+        }
 
-                            self.tree.attach_node(text);
+        Some(ix)
+    }
 
-                            self.state = State::Paragraph;
+    fn parse_bullet_list(&mut self, bytes: &[u8]) {
+        self.tree.attach_node(AstNode::new(
+            Value::ListItem,
+            Position::new(self.consumed, 0),
+            0,
+        ));
 
-                            pos_before_state_change = w.position();
-                            dbg!(w.position());
-                            let _ = self.tree.go_up();
-                        }
+        self.tree.go_down();
+    }
 
-                        w.advance(1);
-                    }
+    fn end_bullet_list(&mut self) {
+        dbg!(self.tree.cursor());
+        dbg!(
+            self.tree
+                .right_edge()
+                .iter()
+                .map(|x| (x, self.tree.get(*x).unwrap()))
+                .collect::<Vec<_>>()
+        );
+        if let Some(parent) = self
+            .tree
+            .right_edge()
+            .last()
+            .copied()
+            .map(|id| self.tree.get(id).expect("id not present"))
+            && matches!(parent.data.value, Value::BulletList { .. })
+        {
+            if let Some(id) = self.bullet_list_origin.take()
+                && let Some(node) = self.tree.get_mut(id)
+            {
+                let pos = Position::new(node.data.pos.start, self.consumed);
 
-                    State::AtxHeading => {
-                        if any == '\n' || w.peek(1).is_none() {
-                            let pos = Position::new(pos_before_state_change, w.position());
-                            dbg!(pos);
-
-                            let _ = self.tree.go_down();
-
-                            let text = AstNode::new(Value::Text, pos, self.new_id());
-                            self.tree.attach_node(text);
-
-                            self.state = State::Paragraph;
-                            pos_before_state_change = w.position() + 1;
-                        }
-
-                        w.advance(1);
-                    }
-
-                    _ => todo!(),
-                },
+                node.data.pos = pos;
+                self.inside_bullet_list = false;
+            } else {
+                unreachable!("node or nodeid was missing")
             }
         }
     }
-}
 
-/// Checks for a newline 1 character back or a lack of any character (start of file)
-fn blank_before(w: &mut Walker<'_>) -> bool {
-    let peek = w.peek_back(1);
+    // returns (relative index, delimeter character) for the bullet list
+    fn scan_bullet_list(&self, bytes: &[u8]) -> Option<(usize, char)> {
+        let list_marker_byte = bytes.get(1).copied()?;
 
-    dbg!(peek.map(|x| x as char));
-    peek == Some(b'\n') || peek.is_none()
+        if bytes.first().copied().is_some_and(|x| x.is_ascii_digit())
+            && matches!(list_marker_byte, b')' | b'.')
+            && bytes.get(2).copied().is_some_and(|byte| byte == b' ')
+        {
+            Some((3, list_marker_byte as char))
+        } else {
+            None
+        }
+    }
+
+    fn count_containers_to_current_node(&mut self) -> usize {
+        let mut amount = 0;
+
+        for ix in 0..self.tree.right_edge().len() {
+            let id = self
+                .tree
+                .right_edge()
+                .get(ix)
+                .copied()
+                .expect("id wasn't present in the tree's spine");
+
+            if let Some(node) = self.tree.get_mut(id)
+                && matches!(node.data.value, Value::Blockquote { .. } | Value::ListItem)
+            {
+                // do something here probably idk.
+
+                node.data.pos.end = self.consumed;
+
+                break;
+            }
+
+            amount += 1;
+        }
+
+        amount
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AstNode, Parser, Walker};
-    use crate::ast::Value;
-    struct Visitor<'a>(&'a str);
+    use super::CompileCx;
+    use crate::ast::AstNode;
+    use crate::tree::TreeArena;
 
-    impl crate::tree::Visitor for Visitor<'_> {
-        fn visit_node(&self, value: &AstNode) {
-            dbg!(value);
-            let val = value.as_str(self.0);
+    macro_rules! ast_test {
+        ($text: expr) => {
+            struct __Visitor<'visitor>(&'visitor str, usize);
+            impl crate::tree::Visitor for __Visitor<'_> {
+                fn visit_node(&mut self, val: &AstNode) {
+                    let txt = val.as_str(self.0);
 
-            println!("{:#?}: [{val}]\n", value.value());
-        }
+                    println!("(order: {}) (type: {:?}) -> ({})", self.1, val.value(), txt,);
+
+                    self.1 += 1
+                }
+            }
+
+            let c = CompileCx {
+                beginning: 0,
+                consumed: 0,
+                text: $text,
+                tree: TreeArena::new(),
+                bullet_list_marker: None,
+                bullet_list_origin: None,
+                ordered_list_index: None,
+                inside_bullet_list: false,
+            };
+
+            let mut visitor = __Visitor($text, 0);
+
+            let tree = c.run();
+
+            tree.preorder_visit(&mut visitor)
+        };
+    }
+
+    #[test]
+    fn all() {
+        ast_test!("This is a paragraph!\n\n# This is a heading.");
     }
 
     #[test]
     fn paragraph() {
-        let data = concat!(
-            "First paragraph\n",
-            "continuation of the first one\n\n",
-            "Second paragraph\n",
-            "continuation of the second one"
-        );
-
-        dbg!(data.get(0..46));
-
-        let mut w = Walker::new(data);
-        let mut p = Parser::new();
-
-        let visitor = Visitor(data);
-
-        p.parse(&mut w);
-
-        p.preorder(&visitor);
+        ast_test!("This is a paragraph!");
     }
 
     #[test]
     fn heading() {
-        let data = concat!("###### Heading level 6\nmeow");
-        let mut w = Walker::new(data);
-        let mut p = Parser::new();
+        ast_test!("###### This is a level 6 heading.");
+    }
 
-        let visitor = Visitor(data);
-
-        p.parse(&mut w);
-
-        dbg!(w.position());
-        dbg!(p.tree.storage());
-        p.preorder(&visitor);
+    #[test]
+    fn bullet_list() {
+        ast_test!(
+            "1. This is a bullet list :3
+            2. This is again a bullet list >:3
+            3. Now the fuss is over...!
+            4. We must go to the fire
+            # monde"
+        );
     }
 }
