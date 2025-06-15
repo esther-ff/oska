@@ -283,13 +283,10 @@ impl<T> TreeArena<T> {
 
     pub fn attach_node(&mut self, item: T) -> NodeId {
         let ix = self.isolated_node(item);
-        dbg!(self.cursor);
 
         if let Some(cur) = self.cursor {
-            println!("We are adding an item!");
             self.get_mut(cur).unwrap().next = Some(ix)
         } else if let Some(&parent) = self.right_edge.last() {
-            println!("ceux de kleber");
             self.get_mut(parent).unwrap().child = Some(ix)
         }
 
@@ -311,7 +308,6 @@ impl<T> TreeArena<T> {
 
         self.cursor = self.get(ix).and_then(|x| x.child);
 
-        dbg!(self.get(ix).and_then(|x| x.child));
         ix
     }
 

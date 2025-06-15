@@ -37,6 +37,8 @@ impl<'a> CompileCx<'a> {
     }
 
     fn pop_containers(&mut self) {
+        let popping = self.consumed;
+        dbg!(popping);
         let i = self.count_containers_to_current_node();
         let len = self.tree.right_edge().len();
 
@@ -45,7 +47,33 @@ impl<'a> CompileCx<'a> {
         }
     }
 
-    fn parse(&mut self, bytes: &[u8]) {
+    fn count_containers_to_current_node(&mut self) -> usize {
+        let mut amount = 0;
+
+        for ix in 0..self.tree.right_edge().len() {
+            let id = self
+                .tree
+                .right_edge()
+                .get(ix)
+                .copied()
+                .expect("id wasn't present in the tree's spine");
+
+            if let Some(node) = self.tree.get_mut(id)
+                && matches!(node.data.value, Value::Blockquote { .. } | Value::ListItem)
+            {
+                // do something here probably idk.
+                node.data.pos.end = self.consumed;
+
+                break;
+            }
+
+            amount += 1;
+        }
+
+        amount
+    }
+
+    fn parse(&mut self, mut bytes: &[u8]) {
         self.pop_containers();
 
         if let Some((bullet_list_start, bullet_list_char)) = self.scan_bullet_list(bytes) {
@@ -62,9 +90,12 @@ impl<'a> CompileCx<'a> {
                 self.tree.go_down();
             }
 
-            self.parse_bullet_list(&bytes[bullet_list_start..]);
+            bytes = &bytes[bullet_list_start..];
+            self.parse_bullet_list(bytes);
             self.consumed += bullet_list_start;
         }
+
+        println!("meow");
 
         if let Some(heading_end) = self.scan_atx_heading(bytes) {
             self.end_bullet_list();
@@ -113,13 +144,14 @@ impl<'a> CompileCx<'a> {
         let node = AstNode::new(crate::ast::Value::Paragraph, pos, 0);
 
         self.tree.attach_node(node);
-
         self.tree.go_down();
         self.tree.attach_node(AstNode::new(Value::Text, pos, 0));
-
         self.tree.go_up();
 
         self.consumed += ix;
+
+        let para = self.consumed;
+        dbg!(para);
     }
 
     fn interrupt_paragraph(&self, bytes: &[u8]) -> bool {
@@ -152,7 +184,6 @@ impl<'a> CompileCx<'a> {
         let mut ix = 0;
 
         while data.get(ix).copied().is_some_and(|byte| byte == b'#') {
-            println!("meow");
             ix += 1;
         }
 
@@ -175,22 +206,25 @@ impl<'a> CompileCx<'a> {
     fn parse_bullet_list(&mut self, bytes: &[u8]) {
         self.tree.attach_node(AstNode::new(
             Value::ListItem,
-            Position::new(self.consumed, 0),
+            Position::new(self.consumed, self.consumed),
             0,
         ));
+
+        let bullet_list = self.consumed;
+        dbg!(bullet_list);
 
         self.tree.go_down();
     }
 
     fn end_bullet_list(&mut self) {
-        dbg!(self.tree.cursor());
-        dbg!(
-            self.tree
-                .right_edge()
-                .iter()
-                .map(|x| (x, self.tree.get(*x).unwrap()))
-                .collect::<Vec<_>>()
-        );
+        // dbg!(self.tree.cursor());
+        // dbg!(
+        //     self.tree
+        //         .right_edge()
+        //         .iter()
+        //         .map(|x| (x, self.tree.get(*x).unwrap()))
+        //         .collect::<Vec<_>>()
+        // );
         if let Some(parent) = self
             .tree
             .right_edge()
@@ -225,33 +259,6 @@ impl<'a> CompileCx<'a> {
             None
         }
     }
-
-    fn count_containers_to_current_node(&mut self) -> usize {
-        let mut amount = 0;
-
-        for ix in 0..self.tree.right_edge().len() {
-            let id = self
-                .tree
-                .right_edge()
-                .get(ix)
-                .copied()
-                .expect("id wasn't present in the tree's spine");
-
-            if let Some(node) = self.tree.get_mut(id)
-                && matches!(node.data.value, Value::Blockquote { .. } | Value::ListItem)
-            {
-                // do something here probably idk.
-
-                node.data.pos.end = self.consumed;
-
-                break;
-            }
-
-            amount += 1;
-        }
-
-        amount
-    }
 }
 
 #[cfg(test)]
@@ -267,7 +274,12 @@ mod tests {
                 fn visit_node(&mut self, val: &AstNode) {
                     let txt = val.as_str(self.0);
 
-                    println!("(order: {}) (type: {:?}) -> ({})", self.1, val.value(), txt,);
+                    println!(
+                        "(order: {}) (type: {:?}) -> ({:#?})",
+                        self.1,
+                        val.value(),
+                        txt,
+                    );
 
                     self.1 += 1
                 }
@@ -310,11 +322,11 @@ mod tests {
     #[test]
     fn bullet_list() {
         ast_test!(
-            "1. This is a bullet list :3
-            2. This is again a bullet list >:3
-            3. Now the fuss is over...!
-            4. We must go to the fire
-            # monde"
+            "1. This is a bullet list :3\n\
+            2. This is again a bullet list >:3\n\
+            3. Now the fuss is over...!\n\
+            4. We must go to the fire\n\
+            # A grand heading"
         );
     }
 }
