@@ -2,7 +2,7 @@ use crate::{
     ast::{AstNode, Position, Value},
     tree::{NodeId, TreeArena},
 };
-use core::num::NonZero;
+use core::{num::NonZero, str};
 
 struct CompileCx<'a> {
     tree: TreeArena<AstNode>,
@@ -16,11 +16,11 @@ struct CompileCx<'a> {
     /// part of the input
     beginning: usize,
 
-    ordered_list_index: Option<usize>,
+    ordered_list_index: Option<u64>,
 
     bullet_list_marker: Option<u8>,
-    bullet_list_origin: Option<NodeId>,
-    inside_bullet_list: bool,
+    list_origin: Option<NodeId>,
+    inside_list: bool,
 }
 
 impl<'a> CompileCx<'a> {
@@ -43,7 +43,7 @@ impl<'a> CompileCx<'a> {
         let len = self.tree.right_edge().len();
 
         for _ in i..len {
-            let id = self.tree.go_up();
+            let _id = self.tree.go_up();
         }
     }
 
@@ -77,22 +77,42 @@ impl<'a> CompileCx<'a> {
         self.pop_containers();
 
         if let Some((bullet_list_start, bullet_list_char)) = self.scan_bullet_list(bytes) {
-            if self.bullet_list_origin.is_none() {
+            if self.list_origin.is_none() {
                 let node = AstNode::new(
                     Value::BulletList { tight: false },
                     Position::new(self.consumed, 0),
                     0,
                 );
 
-                self.inside_bullet_list = true;
+                self.inside_list = true;
 
-                self.bullet_list_origin.replace(self.tree.attach_node(node));
+                self.list_origin.replace(self.tree.attach_node(node));
                 self.tree.go_down();
             }
 
             bytes = &bytes[bullet_list_start..];
             self.parse_bullet_list(bytes);
             self.consumed += bullet_list_start;
+        }
+
+        if let Some((ordered_list_start, ordered_list_start_index)) = self.scan_ordered_list(bytes)
+        {
+            if self.list_origin.is_none() {
+                let node = AstNode::new(
+                    Value::OrderedList { tight: false },
+                    Position::new(self.consumed, 0),
+                    0,
+                );
+
+                self.inside_list = true;
+
+                self.list_origin.replace(self.tree.attach_node(node));
+                self.tree.go_down();
+            }
+
+            bytes = &bytes[ordered_list_start..];
+            self.parse_ordered_list(bytes);
+            self.consumed += ordered_list_start;
         }
 
         println!("meow");
@@ -203,7 +223,7 @@ impl<'a> CompileCx<'a> {
         Some(ix)
     }
 
-    fn parse_bullet_list(&mut self, bytes: &[u8]) {
+    fn parse_bullet_list(&mut self, _bytes: &[u8]) {
         self.tree.attach_node(AstNode::new(
             Value::ListItem,
             Position::new(self.consumed, self.consumed),
@@ -233,13 +253,13 @@ impl<'a> CompileCx<'a> {
             .map(|id| self.tree.get(id).expect("id not present"))
             && matches!(parent.data.value, Value::BulletList { .. })
         {
-            if let Some(id) = self.bullet_list_origin.take()
+            if let Some(id) = self.list_origin.take()
                 && let Some(node) = self.tree.get_mut(id)
             {
                 let pos = Position::new(node.data.pos.start, self.consumed);
 
                 node.data.pos = pos;
-                self.inside_bullet_list = false;
+                self.inside_list = false;
             } else {
                 unreachable!("node or nodeid was missing")
             }
@@ -258,6 +278,48 @@ impl<'a> CompileCx<'a> {
         } else {
             None
         }
+    }
+
+    fn parse_ordered_list(&self, _bytes: &[u8]) {
+        todo!()
+    }
+
+    // returns (relative index, start number of list)
+    fn scan_ordered_list(&self, bytes: &[u8]) -> Option<(usize, u64)> {
+        let mut number_length = 0;
+
+        let mut ix = 0;
+        for (i, byte) in bytes.iter().enumerate() {
+            if !byte.is_ascii_digit() {
+                break;
+            }
+
+            ix = i
+        }
+
+        if ix == 0
+            || ix >= 9
+            || bytes
+                .get(ix + 1)
+                .copied()
+                .is_none_or(|bytechar| bytechar != b'.')
+            || bytes
+                .get(ix + 2)
+                .copied()
+                .is_none_or(|bytechar| bytechar != b' ')
+        {
+            return None;
+        }
+
+        let start_num = unsafe {
+            str::from_utf8_unchecked(&bytes[..ix])
+                .parse::<u64>()
+                .expect("infallible")
+        };
+
+        ix += 3;
+
+        Some((ix, start_num))
     }
 }
 
@@ -291,9 +353,9 @@ mod tests {
                 text: $text,
                 tree: TreeArena::new(),
                 bullet_list_marker: None,
-                bullet_list_origin: None,
+                list_origin: None,
                 ordered_list_index: None,
-                inside_bullet_list: false,
+                inside_list: false,
             };
 
             let mut visitor = __Visitor($text, 0);
