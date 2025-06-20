@@ -41,6 +41,9 @@ impl CompileCx<'_> {
             self.parse(&self.text.as_bytes()[self.consumed..]);
         }
 
+        self.pop_containers();
+        self.end_list();
+
         while !self.tree.right_edge().is_empty() {
             let _ix = self.tree.go_up();
         }
@@ -69,7 +72,7 @@ impl CompileCx<'_> {
                 .expect("id wasn't present in the tree's spine");
 
             if let Some(node) = self.tree.get_mut(id)
-                && matches!(node.data.value, Value::Blockquote { .. } | Value::ListItem)
+                && matches!(node.data.value, Value::Blockquote | Value::ListItem)
             {
                 node.data.pos.end = self.consumed;
 
@@ -84,6 +87,16 @@ impl CompileCx<'_> {
 
     fn parse(&mut self, mut bytes: &[u8]) {
         self.pop_containers();
+
+        if let Some(blockquote_ix) = scan_blockquote(bytes) {
+            let node = AstNode::new(Value::Blockquote, Position::new(self.consumed, 0), 0);
+            self.consumed += blockquote_ix;
+
+            self.tree.attach_node(node);
+            self.tree.go_down();
+
+            return;
+        }
 
         if let Some((bullet_list_start, bullet_list_char, tight)) = scan_bullet_list(bytes) {
             if self.list_origin.is_none() {
@@ -105,8 +118,8 @@ impl CompileCx<'_> {
             }
 
             self.is_list_tight = tight;
-            self.consumed += bullet_list_start;
             self.insert_list_item();
+            self.consumed += bullet_list_start;
 
             bytes = &bytes[bullet_list_start..];
         }
@@ -129,17 +142,17 @@ impl CompileCx<'_> {
                 self.tree.go_down();
             } else if self
                 .ordered_list_char
-                .is_some_and(|x| x == ordered_list_char)
+                .is_some_and(|x| x != ordered_list_char)
             {
                 self.end_list();
                 return;
             }
 
             self.is_list_tight = tight;
+            self.insert_list_item();
             self.consumed += ordered_list_start;
 
             bytes = &bytes[ordered_list_start..];
-            self.insert_list_item();
         }
 
         if let Some(heading_end) = scan_atx_heading(bytes) {
@@ -232,6 +245,13 @@ impl CompileCx<'_> {
     }
 
     fn end_list(&mut self) {
+        // dbg!(
+        //     self.tree
+        //         .right_edge()
+        //         .last()
+        //         .copied()
+        //         .map(|id| self.tree.get_mut(id).expect("id not present"))
+        // );
         if let Some(parent) = self
             .tree
             .right_edge()
@@ -277,20 +297,22 @@ fn scan_two_newlines(bytes: &[u8]) -> bool {
 // returns (relative index, delimeter character) for the bullet list
 fn scan_bullet_list(mut bytes: &[u8]) -> Option<(usize, char, bool)> {
     let tight = scan_two_newlines(bytes);
-    let mut relative_index = 3;
+    let mut relative_index = 2;
 
     if tight {
         bytes = &bytes[2..];
-        relative_index = 5;
+        relative_index = 4;
     }
 
-    let list_marker_byte = bytes.get(1).copied()?;
+    let list_marker_byte = bytes.first().copied().map(|byte| byte as char);
 
-    if bytes.first().copied().is_some_and(|x| x.is_ascii_digit())
-        && matches!(list_marker_byte, b')' | b'.')
-        && bytes.get(2).copied().is_some_and(|byte| byte == b' ')
+    if list_marker_byte.is_some_and(|x| matches!(x, '-'))
+        && bytes
+            .get(1)
+            .copied()
+            .is_some_and(|byte| matches!(byte as char, ' '))
     {
-        Some((relative_index, list_marker_byte as char, tight))
+        Some((relative_index, list_marker_byte?, tight))
     } else {
         None
     }
@@ -300,12 +322,15 @@ fn scan_bullet_list(mut bytes: &[u8]) -> Option<(usize, char, bool)> {
 fn scan_ordered_list(bytes: &[u8]) -> Option<(usize, char, u64, bool)> {
     let tight = scan_two_newlines(bytes);
     let mut ix = if tight { 2 } else { 0 };
+    let bytes = &bytes[ix..];
 
     for (i, byte) in bytes.iter().enumerate() {
         if !byte.is_ascii_digit() {
-            if *byte != b'.' || *byte != b')' {
+            if *byte != b'.' && *byte != b')' {
                 return None;
             }
+
+            ix += 1;
 
             break;
         }
@@ -313,13 +338,16 @@ fn scan_ordered_list(bytes: &[u8]) -> Option<(usize, char, u64, bool)> {
         ix = i;
     }
 
-    let marker_char = bytes.get(ix + 1).copied();
+    let marker_char: char = bytes
+        .get(ix)
+        .copied()
+        .map(Into::into)
+        .expect("infallible, earlier loop ensures there is something here");
 
     if ix == 0
         || ix >= 9
-        || marker_char.is_none_or(|bytechar| bytechar != b'.' || bytechar != b')')
         || bytes
-            .get(ix + 2)
+            .get(ix + 1)
             .copied()
             .is_none_or(|bytechar| bytechar != b' ')
     {
@@ -332,24 +360,21 @@ fn scan_ordered_list(bytes: &[u8]) -> Option<(usize, char, u64, bool)> {
             .expect("infallible")
     };
 
-    ix += 3;
-
-    Some((
-        ix,
-        marker_char
-            .map(|x| x as char)
-            .expect("infallible, earlier loop ensures there is something here"),
-        start_num,
-        tight,
-    ))
+    Some((ix + 2, marker_char, start_num, tight))
 }
 
 // Scans the blockquote
 // ignores initial whitespace
 // returns `Some(index)` if a blockquote is present
 // else it returns `None`
-fn scan_blockquote(_bytes: &[u8]) -> Option<usize> {
-    todo!()
+fn scan_blockquote(bytes: &[u8]) -> Option<usize> {
+    let ix = 1 + usize::from(bytes.get(1).copied().is_some_and(|char| char == b' '));
+
+    if bytes.first().copied().is_some_and(|char| char == b'>') {
+        Some(ix)
+    } else {
+        None
+    }
 }
 
 // if it scans an atx heading
@@ -382,6 +407,7 @@ fn scan_atx_heading(data: &[u8]) -> Option<usize> {
 // scans if a paragraph has to be interrupted
 fn scan_interrupt_paragraph(bytes: &[u8]) -> bool {
     scan_bullet_list(bytes).is_some()
+        || scan_ordered_list(bytes).is_some()
         || scan_atx_heading(bytes).is_some()
         || scan_two_newlines(bytes)
 }
@@ -426,6 +452,7 @@ mod tests {
 
             let tree = c.run();
 
+            println!("");
             tree.preorder_visit(&mut visitor)
         };
     }
@@ -446,13 +473,28 @@ mod tests {
     }
 
     #[test]
-    fn bullet_list() {
+    fn ordered_list() {
         ast_test!(
-            "1. This is a bullet list :3\n\
-            2. This is again a bullet list >:3\n\
+            "1. This is a ordered list :3\n\
+            2. This is again a ordered list >:3\n\
             3. Now the fuss is over...!\n\
             4. We must go to the fire\n\
             # A grand heading"
         );
+    }
+
+    #[test]
+    fn bullet_list() {
+        ast_test!(
+            "- This is a bullet list!\n\
+            - Once again a cruel moment\n\
+            - Salt water.\n\
+            # meow"
+        );
+    }
+
+    #[test]
+    fn blockquote() {
+        ast_test!("> > > Blockquote");
     }
 }

@@ -62,7 +62,7 @@ pub enum Value {
 
     /// Blockquote
     /// contains Blocks.
-    Blockquote { level: NonZero<usize> },
+    Blockquote,
 
     /// A stand-alone block of unescaped
     /// HTML inside a Markdown document
@@ -229,7 +229,7 @@ impl AstNode {
         matches!(
             self.value,
             Value::Paragraph
-                | Value::Blockquote { .. }
+                | Value::Blockquote
                 | Value::HtmlBlock
                 | Value::Heading { .. }
                 | Value::ListItem
