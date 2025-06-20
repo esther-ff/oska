@@ -29,6 +29,9 @@ pub(crate) struct CompileCx<'a> {
 
     /// Points to a `BulletList` or `OrderedList` node.
     list_origin: Option<NodeId>,
+
+    /// Is the list currently processed a tight one
+    is_list_tight: bool,
 }
 
 impl CompileCx<'_> {
@@ -81,7 +84,7 @@ impl CompileCx<'_> {
     fn parse(&mut self, mut bytes: &[u8]) {
         self.pop_containers();
 
-        if let Some((bullet_list_start, bullet_list_char)) = scan_bullet_list(bytes) {
+        if let Some((bullet_list_start, bullet_list_char, tight)) = scan_bullet_list(bytes) {
             if self.list_origin.is_none() {
                 let node = AstNode::new(
                     Value::BulletList { tight: false },
@@ -100,18 +103,22 @@ impl CompileCx<'_> {
                 return;
             }
 
+            self.is_list_tight = tight;
             self.consumed += bullet_list_start;
+            self.insert_list_item();
 
             bytes = &bytes[bullet_list_start..];
-            self.insert_list_item();
         }
 
-        if let Some((ordered_list_start, ordered_list_char, _ordered_list_start_index)) =
+        if let Some((ordered_list_start, ordered_list_char, ordered_list_start_index, tight)) =
             scan_ordered_list(bytes)
         {
             if self.list_origin.is_none() {
                 let node = AstNode::new(
-                    Value::OrderedList { tight: false },
+                    Value::OrderedList {
+                        tight: false,
+                        start_index: ordered_list_start_index,
+                    },
                     Position::new(self.consumed, 0),
                     0,
                 );
@@ -127,6 +134,7 @@ impl CompileCx<'_> {
                 return;
             }
 
+            self.is_list_tight = tight;
             self.consumed += ordered_list_start;
 
             bytes = &bytes[ordered_list_start..];
@@ -164,9 +172,6 @@ impl CompileCx<'_> {
 
         while ix < bytes.len() {
             if scan_interrupt_paragraph(&bytes[ix..]) {
-                break;
-            } else if bytes[ix] == b'\n' && bytes.get(ix + 1).is_some_and(|x| x == &b'\n') {
-                ix += 2;
                 break;
             }
 
@@ -225,21 +230,26 @@ impl CompileCx<'_> {
             .right_edge()
             .last()
             .copied()
-            .map(|id| self.tree.get(id).expect("id not present"))
-            && matches!(
-                parent.data.value,
-                Value::BulletList { .. } | Value::OrderedList { .. }
-            )
+            .map(|id| self.tree.get_mut(id).expect("id not present"))
+            && match parent.data.value {
+                Value::BulletList { ref mut tight } | Value::OrderedList { ref mut tight, .. } => {
+                    *tight = self.is_list_tight;
+                    true
+                }
+
+                _ => false,
+            }
         {
             if let Some(id) = self.list_origin.take()
                 && let Some(node) = self.tree.get_mut(id)
             {
                 let pos = Position::new(node.data.pos.start, self.consumed);
-
                 node.data.pos = pos;
             } else {
                 unreachable!("node or nodeid was missing")
             }
+
+            self.is_list_tight = false;
         }
     }
 
@@ -248,23 +258,42 @@ impl CompileCx<'_> {
     }
 }
 
+// scans for two consecutive newlines
+fn scan_two_newlines(bytes: &[u8]) -> bool {
+    bytes
+        .first()
+        .copied()
+        .zip(bytes.get(1).copied())
+        .is_some_and(|tuple| tuple == (b'\n', b'\n'))
+}
+
 // returns (relative index, delimeter character) for the bullet list
-fn scan_bullet_list(bytes: &[u8]) -> Option<(usize, char)> {
+fn scan_bullet_list(mut bytes: &[u8]) -> Option<(usize, char, bool)> {
+    let tight = scan_two_newlines(bytes);
+    let mut relative_index = 3;
+
+    if tight {
+        bytes = &bytes[2..];
+        relative_index = 5;
+    }
+
     let list_marker_byte = bytes.get(1).copied()?;
 
     if bytes.first().copied().is_some_and(|x| x.is_ascii_digit())
         && matches!(list_marker_byte, b')' | b'.')
         && bytes.get(2).copied().is_some_and(|byte| byte == b' ')
     {
-        Some((3, list_marker_byte as char))
+        Some((relative_index, list_marker_byte as char, tight))
     } else {
         None
     }
 }
 
 // returns (relative index, start number of list)
-fn scan_ordered_list(bytes: &[u8]) -> Option<(usize, char, u64)> {
-    let mut ix = 0;
+fn scan_ordered_list(bytes: &[u8]) -> Option<(usize, char, u64, bool)> {
+    let tight = scan_two_newlines(bytes);
+    let mut ix = if tight { 2 } else { 0 };
+
     for (i, byte) in bytes.iter().enumerate() {
         if !byte.is_ascii_digit() {
             if *byte != b'.' || *byte != b')' {
@@ -304,7 +333,16 @@ fn scan_ordered_list(bytes: &[u8]) -> Option<(usize, char, u64)> {
             .map(|x| x as char)
             .expect("infallible, earlier loop ensures there is something here"),
         start_num,
+        tight,
     ))
+}
+
+// Scans the blockquote
+// ignores initial whitespace
+// returns `Some(index)` if a blockquote is present
+// else it returns `None`
+fn scan_blockquote(_bytes: &[u8]) -> Option<usize> {
+    todo!()
 }
 
 // if it scans an atx heading
@@ -336,7 +374,9 @@ fn scan_atx_heading(data: &[u8]) -> Option<usize> {
 
 // scans if a paragraph has to be interrupted
 fn scan_interrupt_paragraph(bytes: &[u8]) -> bool {
-    scan_bullet_list(bytes).is_some() || scan_atx_heading(bytes).is_some()
+    scan_bullet_list(bytes).is_some()
+        || scan_atx_heading(bytes).is_some()
+        || scan_two_newlines(bytes)
 }
 
 #[cfg(test)]
@@ -372,6 +412,7 @@ mod tests {
                 list_origin: None,
                 ordered_list_char: None,
                 ordered_list_index: None,
+                is_list_tight: false,
             };
 
             let mut visitor = __Visitor($text, 0);

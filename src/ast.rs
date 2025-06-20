@@ -93,7 +93,7 @@ pub enum Value {
     /// ```markdown
     /// 1. This is an ordered list
     /// ```
-    OrderedList { tight: bool },
+    OrderedList { tight: bool, start_index: u64 },
 
     /// List item
     ListItem,
