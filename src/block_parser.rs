@@ -204,11 +204,16 @@ impl CompileCx<'_> {
             ix += 1;
         }
 
-        let node = AstNode::new(
-            Value::Text,
-            Position::new(self.consumed, self.consumed + ix),
-            0,
-        );
+        let end = self.consumed + ix;
+
+        if let Some(heading_id) = self.tree.right_edge().last().copied()
+            && let Some(heading) = self.tree.get_mut(heading_id)
+            && matches!(heading.data.value, Value::Heading { atx: true, .. })
+        {
+            heading.data.pos.end = end;
+        }
+
+        let node = AstNode::new(Value::Text, Position::new(self.consumed, end), 0);
 
         self.consumed += ix;
 
