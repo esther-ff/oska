@@ -37,6 +37,7 @@ pub(crate) struct CompileCx<'a> {
 impl CompileCx<'_> {
     fn run(mut self) -> TreeArena<AstNode> {
         while self.consumed < self.text.len() {
+            // dbg!((self.consumed, self.text.len()));
             self.parse(&self.text.as_bytes()[self.consumed..]);
         }
 
@@ -178,6 +179,10 @@ impl CompileCx<'_> {
             ix += 1;
         }
 
+        if scan_two_newlines(bytes) {
+            self.consumed += 2;
+        }
+
         if ix == 0 {
             return;
         }
@@ -191,9 +196,6 @@ impl CompileCx<'_> {
         self.tree.go_up();
 
         self.consumed += ix;
-
-        let para = self.consumed;
-        dbg!(para);
     }
 
     fn parse_atx_heading(&mut self, bytes: &[u8], heading_end: usize) {
