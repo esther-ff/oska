@@ -63,6 +63,7 @@ impl CompileCx<'_> {
     fn count_containers_to_current_node(&mut self) -> usize {
         let mut amount = 0;
 
+        dbg!(self.tree.right_edge());
         for ix in 0..self.tree.right_edge().len() {
             let id = self
                 .tree
@@ -71,14 +72,14 @@ impl CompileCx<'_> {
                 .copied()
                 .expect("id wasn't present in the tree's spine");
 
+            dbg!(self.tree.get(id));
             if let Some(node) = self.tree.get_mut(id)
                 && matches!(node.data.value, Value::Blockquote | Value::ListItem)
             {
                 node.data.pos.end = self.consumed;
 
-                break;
+                // break;
             }
-
             amount += 1;
         }
 
@@ -88,71 +89,81 @@ impl CompileCx<'_> {
     fn parse(&mut self, mut bytes: &[u8]) {
         self.pop_containers();
 
-        if let Some(blockquote_ix) = scan_blockquote(bytes) {
-            let node = AstNode::new(Value::Blockquote, Position::new(self.consumed, 0), 0);
-            self.consumed += blockquote_ix;
+        loop {
+            dbg!(self.consumed);
+            if let Some(blockquote_ix) = scan_blockquote(bytes) {
+                let node = AstNode::new(Value::Blockquote, Position::new(self.consumed, 0), 0);
+                self.consumed += blockquote_ix;
+                bytes = &bytes[blockquote_ix..];
 
-            self.tree.attach_node(node);
-            self.tree.go_down();
-
-            return;
-        }
-
-        if let Some((bullet_list_start, bullet_list_char, tight)) = scan_bullet_list(bytes) {
-            if self.list_origin.is_none() {
-                let node = AstNode::new(
-                    Value::BulletList { tight: false },
-                    Position::new(self.consumed, 0),
-                    0,
-                );
-
-                self.bullet_list_marker = Some(bullet_list_char);
-                self.list_origin.replace(self.tree.attach_node(node));
+                dbg!(str::from_utf8(&bytes));
+                dbg!(scan_blockquote(bytes));
+                println!("meoeew");
+                self.tree.attach_node(node);
                 self.tree.go_down();
-            } else if self
-                .bullet_list_marker
-                .is_some_and(|x| x != bullet_list_char)
+            } else if let Some((bullet_list_start, bullet_list_char, tight)) =
+                scan_bullet_list(bytes)
             {
-                self.end_list();
-                return;
-            }
+                if self.list_origin.is_none() {
+                    let node = AstNode::new(
+                        Value::BulletList { tight: false },
+                        Position::new(self.consumed, 0),
+                        0,
+                    );
 
-            self.is_list_tight = tight;
-            self.insert_list_item();
-            self.consumed += bullet_list_start;
+                    self.bullet_list_marker = Some(bullet_list_char);
+                    self.list_origin.replace(self.tree.attach_node(node));
+                    self.tree.go_down();
+                } else if self
+                    .bullet_list_marker
+                    .is_some_and(|x| x != bullet_list_char)
+                {
+                    self.end_list();
+                    return;
+                }
 
-            bytes = &bytes[bullet_list_start..];
-        }
+                self.is_list_tight = tight;
+                self.insert_list_item();
+                self.consumed += bullet_list_start;
 
-        if let Some((ordered_list_start, ordered_list_char, ordered_list_start_index, tight)) =
-            scan_ordered_list(bytes)
-        {
-            if self.list_origin.is_none() {
-                let node = AstNode::new(
-                    Value::OrderedList {
-                        tight: false,
-                        start_index: ordered_list_start_index,
-                    },
-                    Position::new(self.consumed, 0),
-                    0,
-                );
-
-                self.ordered_list_char.replace(ordered_list_char);
-                self.list_origin.replace(self.tree.attach_node(node));
-                self.tree.go_down();
-            } else if self
-                .ordered_list_char
-                .is_some_and(|x| x != ordered_list_char)
+                bytes = &bytes[bullet_list_start..];
+            } else if let Some((
+                ordered_list_start,
+                ordered_list_char,
+                ordered_list_start_index,
+                tight,
+            )) = scan_ordered_list(bytes)
             {
-                self.end_list();
-                return;
+                if self.list_origin.is_none() {
+                    let node = AstNode::new(
+                        Value::OrderedList {
+                            tight: false,
+                            start_index: ordered_list_start_index,
+                        },
+                        Position::new(self.consumed, 0),
+                        0,
+                    );
+
+                    self.ordered_list_char.replace(ordered_list_char);
+                    self.list_origin.replace(self.tree.attach_node(node));
+                    self.tree.go_down();
+                } else if self
+                    .ordered_list_char
+                    .is_some_and(|x| x != ordered_list_char)
+                {
+                    self.end_list();
+                    return;
+                }
+
+                self.is_list_tight = tight;
+                self.insert_list_item();
+                self.consumed += ordered_list_start;
+
+                bytes = &bytes[ordered_list_start..];
+            } else {
+                // save location?
+                break;
             }
-
-            self.is_list_tight = tight;
-            self.insert_list_item();
-            self.consumed += ordered_list_start;
-
-            bytes = &bytes[ordered_list_start..];
         }
 
         if let Some(heading_end) = scan_atx_heading(bytes) {
@@ -368,10 +379,8 @@ fn scan_ordered_list(bytes: &[u8]) -> Option<(usize, char, u64, bool)> {
 // returns `Some(index)` if a blockquote is present
 // else it returns `None`
 fn scan_blockquote(bytes: &[u8]) -> Option<usize> {
-    let ix = 1 + usize::from(bytes.get(1).copied().is_some_and(|char| char == b' '));
-
     if bytes.first().copied().is_some_and(|char| char == b'>') {
-        Some(ix)
+        Some(1 + usize::from(bytes.get(1).copied().is_some_and(|char| char == b' ')))
     } else {
         None
     }
