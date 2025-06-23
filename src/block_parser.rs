@@ -3,25 +3,19 @@
 
 use crate::{
     ast::{AstNode, Position, Value},
+    scan::Input,
     tree::{NodeId, TreeArena},
 };
-use core::{num::NonZero, str};
+use core::num::NonZero;
 
-pub(crate) struct CompileCx<'a> {
+pub(crate) struct CompileCx {
+    /// Tree structure for the AST
     tree: TreeArena<AstNode>,
-    text: &'a str,
 
-    /// Amount of consumed bytes from the input
-    /// used for positioning
-    consumed: usize,
-
-    /// Beginning of the still-yet-to-be consumed
-    /// part of the input
-    beginning: usize,
-
+    /// Index of the current ordered list.
     ordered_list_index: Option<u64>,
 
-    /// Character that is currently used by the list
+    /// Character that is currently used by the list.
     bullet_list_marker: Option<char>,
 
     /// Character that comes after the number in an ordered list.
@@ -34,15 +28,15 @@ pub(crate) struct CompileCx<'a> {
     is_list_tight: bool,
 }
 
-impl CompileCx<'_> {
-    fn run(mut self) -> TreeArena<AstNode> {
-        while self.consumed < self.text.len() {
+impl CompileCx {
+    fn run(mut self, mut input: Input<'_>) -> TreeArena<AstNode> {
+        while !input.eof() {
             // dbg!((self.consumed, self.text.len()));
-            self.parse(&self.text.as_bytes()[self.consumed..]);
+            self.parse(&mut input);
         }
 
-        self.pop_containers();
-        self.end_list();
+        self.pop_containers(&input);
+        self.end_list(input.consumed);
 
         while !self.tree.right_edge().is_empty() {
             let _ix = self.tree.go_up();
@@ -51,8 +45,8 @@ impl CompileCx<'_> {
         self.tree
     }
 
-    fn pop_containers(&mut self) {
-        let i = self.count_containers_to_current_node();
+    fn pop_containers(&mut self, input: &Input<'_>) {
+        let i = self.count_containers_to_current_node(input.consumed);
         let len = self.tree.right_edge().len();
 
         dbg!((i, len));
@@ -61,7 +55,7 @@ impl CompileCx<'_> {
         }
     }
 
-    fn count_containers_to_current_node(&mut self) -> usize {
+    fn count_containers_to_current_node(&mut self, end: usize) -> usize {
         let mut amount = 0;
 
         dbg!(self.tree.right_edge());
@@ -76,7 +70,7 @@ impl CompileCx<'_> {
             if let Some(node) = self.tree.get_mut(id)
                 && matches!(node.data.value, Value::Blockquote | Value::ListItem)
             {
-                node.data.pos.end = self.consumed;
+                node.data.pos.end = end;
 
                 if matches!(node.data.value, Value::ListItem) {
                     break;
@@ -88,26 +82,25 @@ impl CompileCx<'_> {
         amount
     }
 
-    fn parse(&mut self, mut bytes: &[u8]) {
-        self.pop_containers();
+    fn parse(&mut self, input: &mut Input<'_>) {
+        self.pop_containers(input);
 
         loop {
             // dbg!(self.consumed);
-            if let Some(blockquote_ix) = scan_blockquote(bytes) {
-                let node = AstNode::new(Value::Blockquote, Position::new(self.consumed, 0), 0);
-                self.consumed += blockquote_ix;
-                bytes = &bytes[blockquote_ix..];
+            if let Some(blockquote_ix) = input.scan_blockquote() {
+                let node = AstNode::new(Value::Blockquote, Position::new(input.consumed, 0), 0);
+                input.consumed += blockquote_ix;
 
                 self.tree.attach_node(node);
                 self.tree.go_down();
             } else if let Some((bullet_list_start, bullet_list_char, tight)) =
-                scan_bullet_list(bytes)
+                input.scan_bullet_list()
             {
-                dbg!(self.tree.right_edge());
+                // dbg!(self.tree.right_edge());
                 if self.list_origin.is_none() {
                     let node = AstNode::new(
                         Value::BulletList { tight: false },
-                        Position::new(self.consumed, 0),
+                        Position::new(input.consumed, 0),
                         0,
                     );
 
@@ -118,18 +111,16 @@ impl CompileCx<'_> {
                     .bullet_list_marker
                     .is_some_and(|x| x != bullet_list_char)
                 {
-                    self.end_list();
+                    self.end_list(input.consumed);
                     return;
                 }
 
                 self.is_list_tight = tight;
-                self.insert_list_item();
-                self.consumed += bullet_list_start;
+                self.insert_list_item(input.consumed);
+                input.consumed += bullet_list_start;
 
-                bytes = &bytes[bullet_list_start..];
-
-                if let Some(empty_line_ix) = scan_empty_line(bytes) {
-                    self.consumed += empty_line_ix;
+                if let Some(empty_line_ix) = input.scan_empty_line() {
+                    input.consumed += empty_line_ix;
                     return;
                 }
             } else if let Some((
@@ -137,7 +128,7 @@ impl CompileCx<'_> {
                 ordered_list_char,
                 ordered_list_start_index,
                 tight,
-            )) = scan_ordered_list(bytes)
+            )) = input.scan_ordered_list()
             {
                 if self.list_origin.is_none() {
                     let node = AstNode::new(
@@ -145,7 +136,7 @@ impl CompileCx<'_> {
                             tight: false,
                             start_index: ordered_list_start_index,
                         },
-                        Position::new(self.consumed, 0),
+                        Position::new(input.consumed, 0),
                         0,
                     );
 
@@ -156,18 +147,16 @@ impl CompileCx<'_> {
                     .ordered_list_char
                     .is_some_and(|x| x != ordered_list_char)
                 {
-                    self.end_list();
+                    self.end_list(input.consumed);
                     return;
                 }
 
                 self.is_list_tight = tight;
-                self.insert_list_item();
-                self.consumed += ordered_list_start;
+                self.insert_list_item(input.consumed);
+                input.consumed += ordered_list_start;
 
-                bytes = &bytes[ordered_list_start..];
-
-                if let Some(empty_line_ix) = scan_empty_line(bytes) {
-                    self.consumed += empty_line_ix;
+                if let Some(empty_line_ix) = input.scan_empty_line() {
+                    input.consumed += empty_line_ix;
                     return;
                 }
             } else {
@@ -176,8 +165,8 @@ impl CompileCx<'_> {
             }
         }
 
-        if let Some(heading_end) = scan_atx_heading(bytes) {
-            self.end_list();
+        if let Some(heading_end) = input.scan_atx_heading() {
+            self.end_list(input.consumed);
 
             let node = AstNode::new(
                 Value::Heading {
@@ -185,62 +174,62 @@ impl CompileCx<'_> {
                     level: NonZero::new(heading_end as u8 - 1).expect("value was 0"),
                     atx: true,
                 },
-                Position::new(self.consumed, self.consumed + heading_end),
+                Position::new(input.consumed, input.consumed + heading_end),
                 0,
             );
 
             self.tree.attach_node(node);
             self.tree.go_down();
 
-            self.consumed += heading_end;
-            self.parse_atx_heading(&bytes[heading_end..], heading_end);
+            input.consumed += heading_end;
+            self.parse_atx_heading(input, heading_end);
 
             self.tree.go_up();
             return;
         }
 
-        dbg!(self.consumed);
-        self.parse_paragraph(bytes);
-        dbg!(self.consumed);
+        // dbg!(input.consumed);
+        self.parse_paragraph(input);
+        // dbg!(input.consumed);
     }
 
-    fn parse_paragraph(&mut self, bytes: &[u8]) {
-        let mut ix = 0;
+    fn parse_paragraph(&mut self, input: &mut Input<'_>) {
+        let old = input.consumed;
 
-        while ix < bytes.len() {
-            if scan_interrupt_paragraph(&bytes[ix..]) {
+        while !input.eof() {
+            if input.scan_interrupt_paragraph() {
                 break;
             }
 
-            ix += 1;
+            input.consumed += 1;
         }
 
-        if scan_two_newlines(bytes) {
-            self.consumed += 2;
+        if input.scan_two_newlines() {
+            input.consumed += 2;
         }
 
-        if ix == 0 {
+        if input.consumed == old {
             return;
         }
 
-        let pos = Position::new(self.consumed, self.consumed + ix);
+        let pos = Position::new(old, input.consumed);
         let node = AstNode::new(crate::ast::Value::Paragraph, pos, 0);
 
         self.tree.attach_node(node);
         self.tree.go_down();
         self.tree.attach_node(AstNode::new(Value::Text, pos, 0));
         self.tree.go_up();
-
-        self.consumed += ix;
     }
 
-    fn parse_atx_heading(&mut self, bytes: &[u8], heading_end: usize) {
+    fn parse_atx_heading(&mut self, input: &mut Input<'_>, heading_end: usize) {
         let mut ix = heading_end;
+        let bytes = input.leftover();
+
         while bytes.get(ix).copied().is_some_and(|byte| byte != b'\n') {
             ix += 1;
         }
 
-        let end = self.consumed + ix;
+        let end = input.consumed + ix;
 
         if let Some(heading_id) = self.tree.right_edge().last().copied()
             && let Some(heading) = self.tree.get_mut(heading_id)
@@ -249,32 +238,25 @@ impl CompileCx<'_> {
             heading.data.pos.end = end;
         }
 
-        let node = AstNode::new(Value::Text, Position::new(self.consumed, end), 0);
+        let node = AstNode::new(Value::Text, Position::new(input.consumed, end), 0);
 
-        self.consumed += ix;
+        input.consumed += ix;
 
         self.tree.go_up();
         self.tree.attach_node(node);
     }
 
-    fn insert_list_item(&mut self) {
+    fn insert_list_item(&mut self, start: usize) {
         self.tree.attach_node(AstNode::new(
             Value::ListItem,
-            Position::new(self.consumed, self.consumed),
+            Position::new(start, start),
             0,
         ));
 
         self.tree.go_down();
     }
 
-    fn end_list(&mut self) {
-        dbg!(
-            self.tree
-                .right_edge()
-                .last()
-                .copied()
-                .map(|id| self.tree.get_mut(id).expect("id not present"))
-        );
+    fn end_list(&mut self, end: usize) {
         if let Some(parent) = self
             .tree
             .right_edge()
@@ -293,9 +275,7 @@ impl CompileCx<'_> {
             if let Some(id) = self.list_origin.take()
                 && let Some(node) = self.tree.get_mut(id)
             {
-                // panic!("waaow");
-                let pos = Position::new(node.data.pos.start, self.consumed);
-                node.data.pos = pos;
+                node.data.pos = Position::new(node.data.pos.start, end);
             } else {
                 unreachable!("node or nodeid was missing")
             }
@@ -309,149 +289,11 @@ impl CompileCx<'_> {
     }
 }
 
-// scans for an empty line
-fn scan_empty_line(bytes: &[u8]) -> Option<usize> {
-    let mut ix = 0;
-    for byte in bytes {
-        match *byte as char {
-            '\n' => return Some(ix + 1),
-            ' ' | '\t' => ix += 1,
-            _ => return None,
-        }
-    }
-
-    None
-}
-
-// scans for two consecutive newlines
-fn scan_two_newlines(bytes: &[u8]) -> bool {
-    bytes
-        .first()
-        .copied()
-        .zip(bytes.get(1).copied())
-        .is_some_and(|tuple| tuple == (b'\n', b'\n'))
-}
-
-// returns (relative index, delimeter character) for the bullet list
-fn scan_bullet_list(mut bytes: &[u8]) -> Option<(usize, char, bool)> {
-    let tight = scan_two_newlines(bytes);
-    let mut relative_index = 2;
-
-    if tight {
-        bytes = &bytes[2..];
-        relative_index = 4;
-    }
-
-    let list_marker_byte = bytes.first().copied().map(|byte| byte as char);
-
-    if list_marker_byte.is_some_and(|x| matches!(x, '-'))
-        && bytes
-            .get(1)
-            .copied()
-            .is_some_and(|byte| matches!(byte as char, ' '))
-    {
-        Some((relative_index, list_marker_byte?, tight))
-    } else {
-        None
-    }
-}
-
-// returns (relative index, start number of list)
-fn scan_ordered_list(bytes: &[u8]) -> Option<(usize, char, u64, bool)> {
-    let tight = scan_two_newlines(bytes);
-    let mut ix = if tight { 2 } else { 0 };
-    let bytes = &bytes[ix..];
-
-    for (i, byte) in bytes.iter().enumerate() {
-        if !byte.is_ascii_digit() {
-            if *byte != b'.' && *byte != b')' {
-                return None;
-            }
-
-            ix += 1;
-
-            break;
-        }
-
-        ix = i;
-    }
-
-    let marker_char: char = bytes
-        .get(ix)
-        .copied()
-        .map(Into::into)
-        .expect("infallible, earlier loop ensures there is something here");
-
-    if ix == 0
-        || ix >= 9
-        || bytes
-            .get(ix + 1)
-            .copied()
-            .is_none_or(|bytechar| bytechar != b' ')
-    {
-        return None;
-    }
-
-    let start_num = unsafe {
-        str::from_utf8_unchecked(&bytes[..ix])
-            .parse::<u64>()
-            .expect("infallible")
-    };
-
-    Some((ix + 2, marker_char, start_num, tight))
-}
-
-// Scans the blockquote
-// ignores initial whitespace
-// returns `Some(index)` if a blockquote is present
-// else it returns `None`
-fn scan_blockquote(bytes: &[u8]) -> Option<usize> {
-    if bytes.first().copied().is_some_and(|char| char == b'>') {
-        Some(1 + usize::from(bytes.get(1).copied().is_some_and(|char| char == b' ')))
-    } else {
-        None
-    }
-}
-
-// if it scans an atx heading
-// it will go down one node
-// so the function parsing the text
-// has to go back up again
-fn scan_atx_heading(data: &[u8]) -> Option<usize> {
-    let mut ix = 0;
-
-    while data.get(ix).copied().is_some_and(|byte| byte == b'#') {
-        ix += 1;
-    }
-
-    if ix == 0
-        || ix > 6
-        || data.get(ix).is_none()
-        || data.get(ix).copied().is_some_and(|x| x != b' ')
-    {
-        return None;
-    }
-
-    // consume all the white space
-    while data.get(ix).copied().is_some_and(|byte| byte == b' ') {
-        ix += 1;
-    }
-
-    Some(ix)
-}
-
-// scans if a paragraph has to be interrupted
-fn scan_interrupt_paragraph(bytes: &[u8]) -> bool {
-    scan_bullet_list(bytes).is_some()
-        || scan_ordered_list(bytes).is_some()
-        || scan_atx_heading(bytes).is_some()
-        || scan_two_newlines(bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::CompileCx;
     use crate::ast::AstNode;
+    use crate::scan::Input;
     use crate::tree::TreeArena;
 
     macro_rules! ast_test {
@@ -472,10 +314,9 @@ mod tests {
                 }
             }
 
+            let input = Input::new($text);
+
             let c = CompileCx {
-                beginning: 0,
-                consumed: 0,
-                text: $text,
                 tree: TreeArena::new(),
                 bullet_list_marker: None,
                 list_origin: None,
@@ -486,7 +327,7 @@ mod tests {
 
             let mut visitor = __Visitor($text, 0);
 
-            let tree = c.run();
+            let tree = c.run(input);
 
             println!("");
             tree.preorder_visit(&mut visitor)

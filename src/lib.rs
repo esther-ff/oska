@@ -10,6 +10,7 @@ pub(crate) mod lib {
 }
 
 mod ast;
+mod scan;
 mod tree;
 
 pub mod block_parser;
