@@ -55,6 +55,7 @@ impl CompileCx<'_> {
         let i = self.count_containers_to_current_node();
         let len = self.tree.right_edge().len();
 
+        dbg!((i, len));
         for _ in i..len {
             let _ix = self.tree.go_up();
         }
@@ -72,13 +73,14 @@ impl CompileCx<'_> {
                 .copied()
                 .expect("id wasn't present in the tree's spine");
 
-            dbg!(self.tree.get(id));
             if let Some(node) = self.tree.get_mut(id)
                 && matches!(node.data.value, Value::Blockquote | Value::ListItem)
             {
                 node.data.pos.end = self.consumed;
 
-                // break;
+                if matches!(node.data.value, Value::ListItem) {
+                    break;
+                }
             }
             amount += 1;
         }
@@ -90,20 +92,18 @@ impl CompileCx<'_> {
         self.pop_containers();
 
         loop {
-            dbg!(self.consumed);
+            // dbg!(self.consumed);
             if let Some(blockquote_ix) = scan_blockquote(bytes) {
                 let node = AstNode::new(Value::Blockquote, Position::new(self.consumed, 0), 0);
                 self.consumed += blockquote_ix;
                 bytes = &bytes[blockquote_ix..];
 
-                dbg!(str::from_utf8(&bytes));
-                dbg!(scan_blockquote(bytes));
-                println!("meoeew");
                 self.tree.attach_node(node);
                 self.tree.go_down();
             } else if let Some((bullet_list_start, bullet_list_char, tight)) =
                 scan_bullet_list(bytes)
             {
+                dbg!(self.tree.right_edge());
                 if self.list_origin.is_none() {
                     let node = AstNode::new(
                         Value::BulletList { tight: false },
@@ -127,6 +127,11 @@ impl CompileCx<'_> {
                 self.consumed += bullet_list_start;
 
                 bytes = &bytes[bullet_list_start..];
+
+                if let Some(empty_line_ix) = scan_empty_line(bytes) {
+                    self.consumed += empty_line_ix;
+                    return;
+                }
             } else if let Some((
                 ordered_list_start,
                 ordered_list_char,
@@ -160,6 +165,11 @@ impl CompileCx<'_> {
                 self.consumed += ordered_list_start;
 
                 bytes = &bytes[ordered_list_start..];
+
+                if let Some(empty_line_ix) = scan_empty_line(bytes) {
+                    self.consumed += empty_line_ix;
+                    return;
+                }
             } else {
                 // save location?
                 break;
@@ -189,7 +199,9 @@ impl CompileCx<'_> {
             return;
         }
 
+        dbg!(self.consumed);
         self.parse_paragraph(bytes);
+        dbg!(self.consumed);
     }
 
     fn parse_paragraph(&mut self, bytes: &[u8]) {
@@ -256,13 +268,13 @@ impl CompileCx<'_> {
     }
 
     fn end_list(&mut self) {
-        // dbg!(
-        //     self.tree
-        //         .right_edge()
-        //         .last()
-        //         .copied()
-        //         .map(|id| self.tree.get_mut(id).expect("id not present"))
-        // );
+        dbg!(
+            self.tree
+                .right_edge()
+                .last()
+                .copied()
+                .map(|id| self.tree.get_mut(id).expect("id not present"))
+        );
         if let Some(parent) = self
             .tree
             .right_edge()
@@ -281,6 +293,7 @@ impl CompileCx<'_> {
             if let Some(id) = self.list_origin.take()
                 && let Some(node) = self.tree.get_mut(id)
             {
+                // panic!("waaow");
                 let pos = Position::new(node.data.pos.start, self.consumed);
                 node.data.pos = pos;
             } else {
@@ -294,6 +307,20 @@ impl CompileCx<'_> {
     fn parse_ordered_list(&self, _bytes: &[u8]) {
         todo!()
     }
+}
+
+// scans for an empty line
+fn scan_empty_line(bytes: &[u8]) -> Option<usize> {
+    let mut ix = 0;
+    for byte in bytes {
+        match *byte as char {
+            '\n' => return Some(ix + 1),
+            ' ' | '\t' => ix += 1,
+            _ => return None,
+        }
+    }
+
+    None
 }
 
 // scans for two consecutive newlines
