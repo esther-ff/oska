@@ -114,9 +114,11 @@ impl CompileCx {
             } else if let Some((list_start, list_char, tight)) = input.scan_bullet_list() {
                 self.is_list_tight = tight;
 
+                dbg!(self.bullet_list_marker);
+                dbg!(list_char);
                 if self.list_origin.is_none() {
                     self.start_bullet_list(input, list_char);
-                } else if self.bullet_list_marker == Some(list_char) {
+                } else if self.bullet_list_marker != Some(list_char) {
                     self.end_list(input.consumed);
                     return;
                 }
@@ -135,7 +137,7 @@ impl CompileCx {
             {
                 if self.list_origin.is_none() {
                     self.start_ordered_list(input, start_index, list_char);
-                } else if self.ordered_list_char == Some(list_char) {
+                } else if self.ordered_list_char != Some(list_char) {
                     self.end_list(input.consumed);
                     return;
                 }
