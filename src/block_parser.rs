@@ -218,6 +218,27 @@ impl CompileCx {
         let old = input.consumed;
 
         while !input.eof() {
+            if input.leftover().first() == Some(&b'\n') && input.leftover().get(1) == Some(&b'=') {
+                input.consumed += 1;
+                if let Some((level, ix)) = input.scan_setext_heading() {
+                    let mut pos = Position::new(old, input.consumed);
+                    let text = AstNode::new(Value::Text, pos, 0);
+
+                    pos.end += ix;
+                    input.consumed += ix;
+
+                    let node =
+                        AstNode::new(crate::ast::Value::Heading { level, atx: false }, pos, 0);
+
+                    self.tree.attach_node(node);
+                    self.tree.go_down();
+                    self.tree.attach_node(text);
+                    self.tree.go_up();
+
+                    return;
+                }
+            }
+
             if input.scan_interrupt_paragraph() {
                 break;
             }
@@ -334,7 +355,7 @@ impl CompileCx {
         }
     }
 
-    fn parse_ordered_list(&self, _bytes: &[u8]) {
+    fn create_list_node<const MARKER: bool>() {
         todo!()
     }
 }
@@ -434,5 +455,13 @@ mod tests {
     #[test]
     fn macro_md() {
         ast_test!("<>= macro_test (argument1) (");
+    }
+
+    #[test]
+    fn setext_heading() {
+        ast_test!(
+            "This is a setext heading!\n\
+            ========="
+        );
     }
 }

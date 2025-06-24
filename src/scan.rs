@@ -1,3 +1,5 @@
+use std::num::{NonZero, NonZeroU8};
+
 pub(crate) struct Input<'i> {
     bytes: &'i [u8],
     pub consumed: usize,
@@ -68,6 +70,45 @@ impl<'i> Input<'i> {
         None
     }
 
+    // scans for a line of `=` or `-`
+    //
+    // if successful, returns (level of heading, index of it's end)
+    pub(crate) fn scan_setext_heading(&self) -> Option<(NonZeroU8, usize)> {
+        if self.eof() {
+            return None;
+        }
+
+        let bytes = self.leftover();
+        let target_char = if let Some(target) = bytes.first().copied()
+            && matches!(target, b'=' | b'-')
+        {
+            target
+        } else {
+            return None;
+        };
+
+        let level = match target_char {
+            b'=' => NonZero::new(1).unwrap(),
+            b'-' => NonZero::new(2).unwrap(),
+            _ => return None,
+        };
+
+        let mut ix = 1;
+        for byte in &bytes[1..] {
+            match *byte {
+                ch if ch == target_char => ix += 1,
+                b'\n' => {
+                    ix += 1;
+                    break;
+                }
+
+                _ => return None,
+            }
+        }
+
+        Some((level, ix))
+    }
+
     // scans for a macro invocation
     //
     // the `MacroSpan` contains the positions of
@@ -81,7 +122,6 @@ impl<'i> Input<'i> {
         }
 
         let bytes = self.leftover();
-        dbg!(bytes);
         if bytes.get(0..4).is_none_or(|arr| arr != b"<>= ") {
             return None;
         }
