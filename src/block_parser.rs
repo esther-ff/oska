@@ -3,7 +3,7 @@
 
 use crate::{
     ast::{AstNode, Position, Value},
-    scan::Input,
+    scan::{Input, MacroSpan},
     tree::{NodeId, TreeArena},
 };
 use core::num::NonZero;
@@ -26,6 +26,9 @@ pub(crate) struct CompileCx {
 
     /// Is the list currently processed a tight one
     is_list_tight: bool,
+
+    /// Are we currently in a macro invocation
+    inside_macro_invc: bool,
 }
 
 impl CompileCx {
@@ -49,7 +52,7 @@ impl CompileCx {
         let i = self.count_containers_to_current_node(input.consumed);
         let len = self.tree.right_edge().len();
 
-        dbg!((i, len));
+        // dbg!((i, len));
         for _ in i..len {
             let _ix = self.tree.go_up();
         }
@@ -58,7 +61,7 @@ impl CompileCx {
     fn count_containers_to_current_node(&mut self, end: usize) -> usize {
         let mut amount = 0;
 
-        dbg!(self.tree.right_edge());
+        // dbg!(self.tree.right_edge());
         for ix in 0..self.tree.right_edge().len() {
             let id = self
                 .tree
@@ -68,7 +71,10 @@ impl CompileCx {
                 .expect("id wasn't present in the tree's spine");
 
             if let Some(node) = self.tree.get_mut(id)
-                && matches!(node.data.value, Value::Blockquote | Value::ListItem)
+                && matches!(
+                    node.data.value,
+                    Value::Blockquote | Value::ListItem | Value::Macro { .. }
+                )
             {
                 node.data.pos.end = end;
 
@@ -84,6 +90,13 @@ impl CompileCx {
 
     fn parse(&mut self, input: &mut Input<'_>) {
         self.pop_containers(input);
+
+        if self.inside_macro_invc && input.scan_macro_end() {
+            // idk!!!
+            // do it!
+
+            self.inside_macro_invc = false;
+        }
 
         loop {
             // dbg!(self.consumed);
@@ -159,6 +172,12 @@ impl CompileCx {
                     input.consumed += empty_line_ix;
                     return;
                 }
+                // for now i forbid nested macros
+                // might be funny later
+            } else if let Some((span, end)) = input.scan_macro()
+                && !self.inside_macro_invc
+            {
+                self.parse_macro(span, end, input);
             } else {
                 // save location?
                 break;
@@ -188,9 +207,11 @@ impl CompileCx {
             return;
         }
 
-        // dbg!(input.consumed);
+        if let Some(ix) = input.scan_style_break() {
+            self.parse_style_break(input, ix);
+        }
+
         self.parse_paragraph(input);
-        // dbg!(input.consumed);
     }
 
     fn parse_paragraph(&mut self, input: &mut Input<'_>) {
@@ -221,6 +242,27 @@ impl CompileCx {
         self.tree.go_up();
     }
 
+    fn parse_macro(&mut self, span: MacroSpan, end: usize, input: &mut Input<'_>) {
+        let (name_start, name_end) = span.name;
+        dbg!(span.name);
+        dbg!(input.leftover());
+        let bytes = &input.leftover()[name_start..name_end - 1];
+        let name = unsafe { core::str::from_utf8_unchecked(bytes) };
+
+        let node = AstNode::new(
+            Value::Macro {
+                name: String::from(name).into_boxed_str(),
+            },
+            Position::new(input.consumed, input.consumed),
+            0,
+        );
+
+        input.consumed += end;
+        dbg!(input.consumed);
+        self.tree.attach_node(node);
+        self.tree.go_down();
+    }
+
     fn parse_atx_heading(&mut self, input: &mut Input<'_>, heading_end: usize) {
         let mut ix = heading_end;
         let bytes = input.leftover();
@@ -243,6 +285,14 @@ impl CompileCx {
         input.consumed += ix;
 
         self.tree.go_up();
+        self.tree.attach_node(node);
+    }
+
+    fn parse_style_break(&mut self, input: &mut Input<'_>, ix: usize) {
+        let old = input.consumed;
+        input.consumed += ix;
+
+        let node = AstNode::new(Value::StyleBreak, Position::new(old, input.consumed), 0);
         self.tree.attach_node(node);
     }
 
@@ -323,6 +373,7 @@ mod tests {
                 ordered_list_char: None,
                 ordered_list_index: None,
                 is_list_tight: false,
+                inside_macro_invc: false,
             };
 
             let mut visitor = __Visitor($text, 0);
@@ -373,5 +424,15 @@ mod tests {
     #[test]
     fn blockquote() {
         ast_test!("> > > Blockquote");
+    }
+
+    #[test]
+    fn style_break() {
+        ast_test!("------------");
+    }
+
+    #[test]
+    fn macro_md() {
+        ast_test!("<>= macro_test (argument1) (");
     }
 }

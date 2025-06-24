@@ -24,6 +24,34 @@ impl<'i> Input<'i> {
         self.consumed >= self.bytes.len()
     }
 
+    // checks if we have a style break
+    //
+    // if successful, returns the index after the break's newline
+    pub(crate) fn scan_style_break(&self) -> Option<usize> {
+        let mut ix = 0;
+        let mut ret = None;
+
+        if self.eof() {
+            return None;
+        };
+
+        for byte in self.leftover() {
+            match *byte {
+                b'+' | b'-' | b'*' => ix += 1,
+                b'\n' if ix >= 3 => ret = Some(ix),
+                b'\n' => break,
+
+                _ => break,
+            }
+        }
+
+        if self.leftover().len() == ix {
+            ret = Some(ix)
+        }
+
+        ret
+    }
+
     // scans for an empty line ending with '\n'
     //
     // TODO: make this work for `\r` too
@@ -40,8 +68,88 @@ impl<'i> Input<'i> {
         None
     }
 
+    // scans for a macro invocation
+    //
+    // the `MacroSpan` contains the positions of
+    //
+    // <>= name (arguments) (
+    // ^^^ ^^^  ^---------^ x
+    // and the returned usize is the index after the brace (marked as x)
+    pub(crate) fn scan_macro(&self) -> Option<(MacroSpan, usize)> {
+        if self.eof() {
+            return None;
+        }
+
+        let bytes = self.leftover();
+        dbg!(bytes);
+        if bytes.get(0..4).is_none_or(|arr| arr != b"<>= ") {
+            return None;
+        }
+
+        let mut ix = 4;
+        let mut span = MacroSpan {
+            operator: (0, 4),
+            name: (4, 0),
+            args: (0, 0),
+        };
+
+        // name
+        for byte in &bytes[ix..] {
+            if *byte == b' ' {
+                span.name.1 = ix + 1;
+                ix += 2;
+                span.args.0 = ix;
+                break;
+            }
+
+            ix += 1
+        }
+
+        if ix == 3 || bytes.get(ix - 1).is_none_or(|byte| *byte != b'(') {
+            return None;
+        }
+
+        // arg braces
+        for byte in &bytes[ix + 1..] {
+            ix += 1;
+            if *byte == b')' {
+                span.args.1 = ix;
+                break;
+            }
+        }
+
+        // skip whitespace
+        loop {
+            if bytes.get(ix).is_none_or(|x| !x.is_ascii_whitespace()) {
+                ix += 2;
+                break;
+            }
+
+            ix += 1;
+        }
+
+        if bytes.get(ix).copied() != Some(b'(') {
+            None
+        } else {
+            Some((span, ix + 1))
+        }
+    }
+
+    pub(crate) fn scan_macro_end(&self) -> bool {
+        if let Some(arr) = self.bytes.get(self.consumed..) {
+            return arr.first().is_some_and(|x| *x == b')')
+                && arr.get(1).is_none_or(|x| *x == b'\n');
+        }
+
+        false
+    }
+
     // scans for two consecutive newlines like `\n\n`
     pub(crate) fn scan_two_newlines(&self) -> bool {
+        if self.eof() {
+            return false;
+        }
+
         let bytes = self.leftover();
 
         bytes
@@ -51,12 +159,16 @@ impl<'i> Input<'i> {
             .is_some_and(|tuple| tuple == (b'\n', b'\n'))
     }
 
-    // scans for a bulliet list start `<char> ` where char is `+` or `-` or `*`
+    // scans for a bullet list start `<char> ` where char is `+` or `-` or `*`
     //
     // if it succeeds, it returns (index after marker, character used, tightness)
     pub(crate) fn scan_bullet_list(&self) -> Option<(usize, char, bool)> {
         let tight = self.scan_two_newlines();
         let mut relative_index = 2;
+        if self.eof() {
+            return None;
+        }
+
         let mut bytes = self.leftover();
 
         bytes = if tight {
@@ -87,7 +199,8 @@ impl<'i> Input<'i> {
     pub(crate) fn scan_ordered_list(&self) -> Option<(usize, char, u64, bool)> {
         let tight = self.scan_two_newlines();
         let mut ix = if tight { 2 } else { 0 };
-        let bytes = &self.leftover()[ix..];
+
+        let bytes = &self.bytes.get(self.consumed..)?.get(ix..)?;
 
         for (i, byte) in bytes.iter().enumerate() {
             if !byte.is_ascii_digit() {
@@ -103,11 +216,7 @@ impl<'i> Input<'i> {
             ix = i;
         }
 
-        let marker_char: char = bytes
-            .get(ix)
-            .copied()
-            .map(Into::into)
-            .expect("infallible, earlier loop ensures there is something here");
+        let marker_char: char = bytes.get(ix).copied().map(Into::into)?;
 
         if ix == 0
             || ix >= 9
@@ -132,6 +241,10 @@ impl<'i> Input<'i> {
     //
     // returns index after marker if it succeeds
     pub(crate) fn scan_blockquote(&self) -> Option<usize> {
+        if self.eof() {
+            return None;
+        }
+
         let bytes = self.leftover();
         if bytes
             .first()
@@ -155,6 +268,10 @@ impl<'i> Input<'i> {
     //
     // if it succeeds, returns the index after the marker and all the whitespace
     pub(crate) fn scan_atx_heading(&self) -> Option<usize> {
+        if self.eof() {
+            return None;
+        }
+
         let bytes = self.leftover();
 
         let mut ix = 0;
@@ -186,4 +303,11 @@ impl<'i> Input<'i> {
             || self.scan_atx_heading().is_some()
             || self.scan_two_newlines()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq)]
+pub(crate) struct MacroSpan {
+    pub operator: (usize, usize),
+    pub name: (usize, usize),
+    pub args: (usize, usize),
 }

@@ -56,6 +56,12 @@ pub enum Value {
     /// contains Blocks.
     Root,
 
+    // Macro invocation
+    // contains Blocks.
+    Macro {
+        name: Box<str>,
+    },
+
     /// Paragraph
     /// contains Inlines.
     Paragraph,
@@ -75,7 +81,10 @@ pub enum Value {
 
     /// A heading
     /// contains Inlines.
-    Heading { level: NonZero<u8>, atx: bool },
+    Heading {
+        level: NonZero<u8>,
+        atx: bool,
+    },
 
     /// A bullet list
     /// contains List items
@@ -84,7 +93,9 @@ pub enum Value {
     /// ```markdown
     /// - This is a bullet list!
     /// ```
-    BulletList { tight: bool },
+    BulletList {
+        tight: bool,
+    },
 
     /// An ordered list
     /// contains List items
@@ -93,7 +104,10 @@ pub enum Value {
     /// ```markdown
     /// 1. This is an ordered list
     /// ```
-    OrderedList { tight: bool, start_index: u64 },
+    OrderedList {
+        tight: bool,
+        start_index: u64,
+    },
 
     /// List item
     ListItem,
@@ -109,7 +123,9 @@ pub enum Value {
 
     // Inline elements
     /// An emphasis
-    Emphasis { strong: bool },
+    Emphasis {
+        strong: bool,
+    },
 
     /// Link
     ///
@@ -208,6 +224,7 @@ impl AstNode {
     where
         'a: 'b,
     {
+        dbg!(self.pos);
         self.pos
             .view_substring(data)
             .unwrap_or_else(|| unreachable!("the range was out-of-bounds in `as_str`"))
@@ -238,6 +255,7 @@ impl AstNode {
                 | Value::Code { .. }
                 | Value::HardBreak
                 | Value::SoftBreak
+                | Value::Macro { .. }
         )
     }
 }
