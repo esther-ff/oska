@@ -83,7 +83,6 @@ pub enum Value {
     /// contains Inlines.
     Heading {
         level: NonZero<u8>,
-        atx: bool,
     },
 
     /// A bullet list

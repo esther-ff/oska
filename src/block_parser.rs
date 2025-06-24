@@ -6,6 +6,7 @@ use crate::{
     scan::{Input, MacroSpan},
     tree::{NodeId, TreeArena},
 };
+
 use core::num::NonZero;
 
 pub(crate) struct CompileCx {
@@ -32,9 +33,9 @@ pub(crate) struct CompileCx {
 }
 
 impl CompileCx {
+    // "compiles" the input to an AST
     fn run(mut self, mut input: Input<'_>) -> TreeArena<AstNode> {
         while !input.eof() {
-            // dbg!((self.consumed, self.text.len()));
             self.parse(&mut input);
         }
 
@@ -48,16 +49,18 @@ impl CompileCx {
         self.tree
     }
 
+    // pops any containers on the road to the current node
     fn pop_containers(&mut self, input: &Input<'_>) {
         let i = self.count_containers_to_current_node(input.consumed);
         let len = self.tree.right_edge().len();
 
-        // dbg!((i, len));
         for _ in i..len {
             let _ix = self.tree.go_up();
         }
     }
 
+    // counts containers on way to the current node
+    // and assigns them their end positions (`end`)
     fn count_containers_to_current_node(&mut self, end: usize) -> usize {
         let mut amount = 0;
 
@@ -88,122 +91,81 @@ impl CompileCx {
         amount
     }
 
+    // parses one block at a time
     fn parse(&mut self, input: &mut Input<'_>) {
         self.pop_containers(input);
 
         if self.inside_macro_invc && input.scan_macro_end() {
-            // idk!!!
-            // do it!
-
+            input.consumed += 1; // skip the ')'
+            self.tree.go_up();
             self.inside_macro_invc = false;
         }
 
         loop {
-            // dbg!(self.consumed);
+            // Blockquotes.
             if let Some(blockquote_ix) = input.scan_blockquote() {
                 let node = AstNode::new(Value::Blockquote, Position::new(input.consumed, 0), 0);
                 input.consumed += blockquote_ix;
 
                 self.tree.attach_node(node);
                 self.tree.go_down();
-            } else if let Some((bullet_list_start, bullet_list_char, tight)) =
-                input.scan_bullet_list()
-            {
-                // dbg!(self.tree.right_edge());
-                if self.list_origin.is_none() {
-                    let node = AstNode::new(
-                        Value::BulletList { tight: false },
-                        Position::new(input.consumed, 0),
-                        0,
-                    );
 
-                    self.bullet_list_marker = Some(bullet_list_char);
-                    self.list_origin.replace(self.tree.attach_node(node));
-                    self.tree.go_down();
-                } else if self
-                    .bullet_list_marker
-                    .is_some_and(|x| x != bullet_list_char)
-                {
+            // Bullet lists
+            } else if let Some((list_start, list_char, tight)) = input.scan_bullet_list() {
+                self.is_list_tight = tight;
+
+                if self.list_origin.is_none() {
+                    self.start_bullet_list(input, list_char);
+                } else if self.bullet_list_marker == Some(list_char) {
+                    self.end_list(input.consumed);
+                    return;
+                }
+
+                self.insert_list_item(input.consumed);
+                input.consumed += list_start;
+
+                if let Some(empty_line_ix) = input.scan_empty_line() {
+                    input.consumed += empty_line_ix;
+                    return;
+                }
+
+            // Ordered lists
+            } else if let Some((list_start, list_char, start_index, tight)) =
+                input.scan_ordered_list()
+            {
+                if self.list_origin.is_none() {
+                    self.start_ordered_list(input, start_index, list_char);
+                } else if self.ordered_list_char == Some(list_char) {
                     self.end_list(input.consumed);
                     return;
                 }
 
                 self.is_list_tight = tight;
                 self.insert_list_item(input.consumed);
-                input.consumed += bullet_list_start;
+                input.consumed += list_start;
 
                 if let Some(empty_line_ix) = input.scan_empty_line() {
                     input.consumed += empty_line_ix;
                     return;
                 }
-            } else if let Some((
-                ordered_list_start,
-                ordered_list_char,
-                ordered_list_start_index,
-                tight,
-            )) = input.scan_ordered_list()
-            {
-                if self.list_origin.is_none() {
-                    let node = AstNode::new(
-                        Value::OrderedList {
-                            tight: false,
-                            start_index: ordered_list_start_index,
-                        },
-                        Position::new(input.consumed, 0),
-                        0,
-                    );
 
-                    self.ordered_list_char.replace(ordered_list_char);
-                    self.list_origin.replace(self.tree.attach_node(node));
-                    self.tree.go_down();
-                } else if self
-                    .ordered_list_char
-                    .is_some_and(|x| x != ordered_list_char)
-                {
-                    self.end_list(input.consumed);
-                    return;
-                }
-
-                self.is_list_tight = tight;
-                self.insert_list_item(input.consumed);
-                input.consumed += ordered_list_start;
-
-                if let Some(empty_line_ix) = input.scan_empty_line() {
-                    input.consumed += empty_line_ix;
-                    return;
-                }
-                // for now i forbid nested macros
-                // might be funny later
+            // Macros
             } else if let Some((span, end)) = input.scan_macro()
                 && !self.inside_macro_invc
             {
+                // for now i forbid nested macros
+                // might be funny later
                 self.parse_macro(span, end, input);
             } else {
-                // save location?
                 break;
             }
         }
 
         if let Some(heading_end) = input.scan_atx_heading() {
             self.end_list(input.consumed);
-
-            let node = AstNode::new(
-                Value::Heading {
-                    #[allow(clippy::cast_possible_truncation)]
-                    level: NonZero::new(heading_end as u8 - 1).expect("value was 0"),
-                    atx: true,
-                },
-                Position::new(input.consumed, input.consumed + heading_end),
-                0,
-            );
-
-            self.tree.attach_node(node);
-            self.tree.go_down();
-
-            input.consumed += heading_end;
             self.parse_atx_heading(input, heading_end);
-
             self.tree.go_up();
+
             return;
         }
 
@@ -218,25 +180,9 @@ impl CompileCx {
         let old = input.consumed;
 
         while !input.eof() {
-            if input.leftover().first() == Some(&b'\n') && input.leftover().get(1) == Some(&b'=') {
-                input.consumed += 1;
-                if let Some((level, ix)) = input.scan_setext_heading() {
-                    let mut pos = Position::new(old, input.consumed);
-                    let text = AstNode::new(Value::Text, pos, 0);
-
-                    pos.end += ix;
-                    input.consumed += ix;
-
-                    let node =
-                        AstNode::new(crate::ast::Value::Heading { level, atx: false }, pos, 0);
-
-                    self.tree.attach_node(node);
-                    self.tree.go_down();
-                    self.tree.attach_node(text);
-                    self.tree.go_up();
-
-                    return;
-                }
+            if let Some((level, ix)) = input.scan_setext_heading() {
+                self.parse_setext_heading(level, input, old, ix);
+                return;
             }
 
             if input.scan_interrupt_paragraph() {
@@ -264,27 +210,41 @@ impl CompileCx {
     }
 
     fn parse_macro(&mut self, span: MacroSpan, end: usize, input: &mut Input<'_>) {
+        use core::str::from_utf8_unchecked;
+
         let (name_start, name_end) = span.name;
-        dbg!(span.name);
-        dbg!(input.leftover());
-        let bytes = &input.leftover()[name_start..name_end - 1];
-        let name = unsafe { core::str::from_utf8_unchecked(bytes) };
+        let bytes = &input
+            .leftover()
+            .get(name_start..name_end - 1)
+            .expect("must be present due to earlier scan");
 
         let node = AstNode::new(
             Value::Macro {
-                name: String::from(name).into_boxed_str(),
+                name: unsafe { String::from(from_utf8_unchecked(bytes)).into_boxed_str() },
             },
             Position::new(input.consumed, input.consumed),
             0,
         );
 
         input.consumed += end;
-        dbg!(input.consumed);
         self.tree.attach_node(node);
         self.tree.go_down();
     }
 
     fn parse_atx_heading(&mut self, input: &mut Input<'_>, heading_end: usize) {
+        let node = AstNode::new(
+            Value::Heading {
+                #[allow(clippy::cast_possible_truncation)]
+                level: NonZero::new(heading_end as u8 - 1).expect("value was 0"),
+            },
+            Position::new(input.consumed, input.consumed + heading_end),
+            0,
+        );
+
+        self.tree.attach_node(node);
+        self.tree.go_down();
+
+        input.consumed += heading_end;
         let mut ix = heading_end;
         let bytes = input.leftover();
 
@@ -296,7 +256,7 @@ impl CompileCx {
 
         if let Some(heading_id) = self.tree.right_edge().last().copied()
             && let Some(heading) = self.tree.get_mut(heading_id)
-            && matches!(heading.data.value, Value::Heading { atx: true, .. })
+            && matches!(heading.data.value, Value::Heading { .. })
         {
             heading.data.pos.end = end;
         }
@@ -307,6 +267,27 @@ impl CompileCx {
 
         self.tree.go_up();
         self.tree.attach_node(node);
+    }
+
+    fn parse_setext_heading(
+        &mut self,
+        level: NonZero<u8>,
+        input: &mut Input<'_>,
+        old_pos: usize,
+        ix: usize,
+    ) {
+        let mut pos = Position::new(old_pos, input.consumed);
+        let text = AstNode::new(Value::Text, pos, 0);
+
+        pos.end += ix;
+        input.consumed += ix;
+
+        let node = AstNode::new(crate::ast::Value::Heading { level }, pos, 0);
+
+        self.tree.attach_node(node);
+        self.tree.go_down();
+        self.tree.attach_node(text);
+        self.tree.go_up();
     }
 
     fn parse_style_break(&mut self, input: &mut Input<'_>, ix: usize) {
@@ -324,6 +305,33 @@ impl CompileCx {
             0,
         ));
 
+        self.tree.go_down();
+    }
+
+    fn start_ordered_list(&mut self, input: &mut Input<'_>, start_index: u64, list_char: char) {
+        let node = AstNode::new(
+            Value::OrderedList {
+                tight: false,
+                start_index,
+            },
+            Position::new(input.consumed, 0),
+            0,
+        );
+
+        self.ordered_list_char.replace(list_char);
+        self.list_origin.replace(self.tree.attach_node(node));
+        self.tree.go_down();
+    }
+
+    fn start_bullet_list(&mut self, input: &mut Input<'_>, list_char: char) {
+        let node = AstNode::new(
+            Value::BulletList { tight: false },
+            Position::new(input.consumed, 0),
+            0,
+        );
+
+        self.bullet_list_marker = Some(list_char);
+        self.list_origin.replace(self.tree.attach_node(node));
         self.tree.go_down();
     }
 
@@ -347,16 +355,10 @@ impl CompileCx {
                 && let Some(node) = self.tree.get_mut(id)
             {
                 node.data.pos = Position::new(node.data.pos.start, end);
-            } else {
-                unreachable!("node or nodeid was missing")
             }
 
             self.is_list_tight = false;
         }
-    }
-
-    fn create_list_node<const MARKER: bool>() {
-        todo!()
     }
 }
 
