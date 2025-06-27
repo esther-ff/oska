@@ -263,7 +263,7 @@ impl CompileCx {
 
         let node = AstNode::new(Value::Text, Position::new(input.consumed, end), 0);
 
-        input.consumed += ix;
+        input.consumed += ix + 1; // +1 to skip potential newline
 
         self.tree.go_up();
         self.tree.attach_node(node);
@@ -368,7 +368,7 @@ mod tests {
     use crate::tree::TreeArena;
 
     macro_rules! test_ast {
-        ($src:expr, Limit: $lim: expr, $($rules: tt)+) => {{
+        ($src:expr, Limit: $lim:expr, Strict: $strict:expr, $($rules: tt)+) => {{
             type __Rule = (Value, &'static str);
             struct __TestVisitor<'v> {
                 src: &'v str,
@@ -383,42 +383,52 @@ mod tests {
                             "too much input, expected {} nodes, found {}",
                             $lim, self.idx
                         );
-                    }
-
-                    let Some(cur_rule) = self.rules.get(self.idx) else {
-                        return;
                     };
 
                     let txt = val.as_str(self.src);
 
-                    if *val.value() != cur_rule.0 {
-                        panic!(
-                            "invalid value ({:#?}) instead of ({:#?})",
-                            val.value(),
-                            cur_rule.0
-                        );
-                    }
+                    if let Some(cur_rule) = self.rules.get(self.idx) {
+                        if *val.value() != cur_rule.0 {
+                            panic!(
+                                "invalid value ({:#?}) instead of ({:#?})",
+                                val.value(),
+                                cur_rule.0
+                            );
+                        }
 
-                    if txt != cur_rule.1 {
-                        panic!(
-                            "invalid text ({}) instead of ({}) at idx: {}\n at value: {:#?}",
-                            txt,
-                            cur_rule.1,
+                        if txt != cur_rule.1 {
+                            panic!(
+                                "invalid text ({:#?}) instead of ({:#?}) at idx: {}\n at value: {:#?}",
+                                txt,
+                                cur_rule.1,
+                                self.idx,
+                                val.value()
+                            );
+                        }
+
+                        println!(
+                            "(order: {:>4}) (type: {:15?}) -> ({:5?})",
                             self.idx,
-                            val.value()
+                            val.value(),
+                            txt,
                         );
-                    }
-
-                    println!(
-                        "(order: {}) (type: {:?}) -> ({:#?})",
-                        self.idx,
-                        val.value(),
-                        txt,
-                    );
+                    } else {
+                        if $strict {
+                            panic!("more nodes than registered rules in text")
+                        } else {
+                            println!(
+                                "overflow: (order: {}) (type: {:?}) -> ({:#?})",
+                                self.idx,
+                                val.value(),
+                                txt,
+                            );
+                        }
+                    };
 
                     self.idx += 1
                 }
             }
+
             let input = Input::new($src);
 
             let c = CompileCx {
@@ -439,7 +449,7 @@ mod tests {
 
             let tree = c.run(input);
 
-            println!("");
+            println!("\nLimit: {} nodes, Strict mode {}!\n", $lim, $strict);
             tree.preorder_visit(&mut visitor)
         }};
     }
@@ -493,9 +503,9 @@ mod tests {
         // ast_test!("This is a paragraph!");
         test_ast!(
             "This is a paragraph!",
-            Limit: 1,
+            Limit: 1, Strict: true,
             (Value::Paragraph, "This is a paragraph!")
-        )
+        );
     }
 
     #[test]
@@ -505,12 +515,30 @@ mod tests {
 
     #[test]
     fn ordered_list() {
-        ast_test!(
-            "1. This is a ordered list :3\n\
-            2. This is again a ordered list >:3\n\
+        const TEST: &str = "1. This is a ordered list >:3\n\
+            2. This is again a ordered list\n\
             3. Now the fuss is over...!\n\
-            4. We must go to the fire\n\
-            # A grand heading"
+            4. We must go to the fire\n";
+
+        test_ast!(
+            TEST, Limit: 13, Strict: true,
+            (Value::OrderedList { tight: false, start_index: 1 }, TEST),
+
+            (Value::ListItem, "1. This is a ordered list >:3\n"),
+            (Value::Paragraph, "This is a ordered list >:3\n"),
+            (Value::Text, "This is a ordered list >:3\n"),
+
+            (Value::ListItem, "2. This is again a ordered list\n"),
+            (Value::Paragraph, "This is again a ordered list\n"),
+            (Value::Text, "This is again a ordered list\n"),
+
+            (Value::ListItem, "3. Now the fuss is over...!\n"),
+            (Value::Paragraph, "Now the fuss is over...!\n"),
+            (Value::Text, "Now the fuss is over...!\n"),
+
+            (Value::ListItem, "4. We must go to the fire\n"),
+            (Value::Paragraph, "We must go to the fire\n"),
+            (Value::Text, "We must go to the fire\n")
         );
     }
 
