@@ -2,7 +2,7 @@ use crate::lib::{Box, String, ToString};
 use core::fmt::Debug;
 use core::num::NonZero;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq)]
 pub struct CodeMeta {
     lang: Lang,
     info: Option<String>,
@@ -49,7 +49,7 @@ impl Lang {
 }
 
 /// Value of a Markdown AST node.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq)]
 pub enum Value {
     // Block elements
     /// The root of the document

@@ -114,8 +114,6 @@ impl CompileCx {
             } else if let Some((list_start, list_char, tight)) = input.scan_bullet_list() {
                 self.is_list_tight = tight;
 
-                dbg!(self.bullet_list_marker);
-                dbg!(list_char);
                 if self.list_origin.is_none() {
                     self.start_bullet_list(input, list_char);
                 } else if self.bullet_list_marker != Some(list_char) {
@@ -338,28 +336,26 @@ impl CompileCx {
     }
 
     fn end_list(&mut self, end: usize) {
-        if let Some(parent) = self
-            .tree
-            .right_edge()
-            .last()
-            .copied()
-            .map(|id| self.tree.get_mut(id).expect("id not present"))
-            && match parent.data.value {
+        let id = self.tree.right_edge().last().copied();
+
+        if let Some(parent_id) = id
+            && let Some(parent) = self.tree.get_mut(parent_id)
+        {
+            match parent.data.value {
                 Value::BulletList { ref mut tight } | Value::OrderedList { ref mut tight, .. } => {
                     *tight = self.is_list_tight;
-                    true
+
+                    if let Some(id) = self.list_origin.take()
+                        && let Some(node) = self.tree.get_mut(id)
+                    {
+                        node.data.pos.end = end;
+                    }
+
+                    self.is_list_tight = false;
                 }
 
-                _ => false,
+                _ => (),
             }
-        {
-            if let Some(id) = self.list_origin.take()
-                && let Some(node) = self.tree.get_mut(id)
-            {
-                node.data.pos = Position::new(node.data.pos.start, end);
-            }
-
-            self.is_list_tight = false;
         }
     }
 }
@@ -367,9 +363,86 @@ impl CompileCx {
 #[cfg(test)]
 mod tests {
     use super::CompileCx;
-    use crate::ast::AstNode;
+    use crate::ast::{AstNode, Value};
     use crate::scan::Input;
     use crate::tree::TreeArena;
+
+    macro_rules! test_ast {
+        ($src:expr, Limit: $lim: expr, $($rules: tt)+) => {{
+            type __Rule = (Value, &'static str);
+            struct __TestVisitor<'v> {
+                src: &'v str,
+                rules: Box<[__Rule]>,
+                idx: usize,
+            }
+
+            impl crate::tree::Visitor for __TestVisitor<'_> {
+                fn visit_node(&mut self, val: &AstNode) {
+                    if self.idx > $lim {
+                        panic!(
+                            "too much input, expected {} nodes, found {}",
+                            $lim, self.idx
+                        );
+                    }
+
+                    let Some(cur_rule) = self.rules.get(self.idx) else {
+                        return;
+                    };
+
+                    let txt = val.as_str(self.src);
+
+                    if *val.value() != cur_rule.0 {
+                        panic!(
+                            "invalid value ({:#?}) instead of ({:#?})",
+                            val.value(),
+                            cur_rule.0
+                        );
+                    }
+
+                    if txt != cur_rule.1 {
+                        panic!(
+                            "invalid text ({}) instead of ({}) at idx: {}\n at value: {:#?}",
+                            txt,
+                            cur_rule.1,
+                            self.idx,
+                            val.value()
+                        );
+                    }
+
+                    println!(
+                        "(order: {}) (type: {:?}) -> ({:#?})",
+                        self.idx,
+                        val.value(),
+                        txt,
+                    );
+
+                    self.idx += 1
+                }
+            }
+            let input = Input::new($src);
+
+            let c = CompileCx {
+                tree: TreeArena::new(),
+                bullet_list_marker: None,
+                list_origin: None,
+                ordered_list_char: None,
+                ordered_list_index: None,
+                is_list_tight: false,
+                inside_macro_invc: false,
+            };
+
+            let mut visitor = __TestVisitor {
+                src: $src,
+                rules: Vec::from([$($rules)+]).into_boxed_slice(),
+                idx: 0,
+            };
+
+            let tree = c.run(input);
+
+            println!("");
+            tree.preorder_visit(&mut visitor)
+        }};
+    }
 
     macro_rules! ast_test {
         ($text: expr) => {
@@ -379,7 +452,7 @@ mod tests {
                     let txt = val.as_str(self.0);
 
                     println!(
-                        "(order: {}) (type: {:?}) -> ({:#?})",
+                        "(order: {}) (type: {:#?}) -> ({:#?})",
                         self.1,
                         val.value(),
                         txt,
@@ -417,7 +490,12 @@ mod tests {
 
     #[test]
     fn paragraph() {
-        ast_test!("This is a paragraph!");
+        // ast_test!("This is a paragraph!");
+        test_ast!(
+            "This is a paragraph!",
+            Limit: 1,
+            (Value::Paragraph, "This is a paragraph!")
+        )
     }
 
     #[test]
