@@ -209,8 +209,10 @@ impl<'i> Input<'i> {
             return None;
         }
 
+        // dbg!((tight,));
         let mut bytes = self.leftover();
 
+        // dbg!((core::str::from_utf8(bytes).unwrap()));
         bytes = if tight {
             relative_index = 4;
 

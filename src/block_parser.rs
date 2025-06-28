@@ -112,7 +112,13 @@ impl CompileCx {
 
             // Bullet lists
             } else if let Some((list_start, list_char, tight)) = input.scan_bullet_list() {
-                self.is_list_tight = tight;
+                if !self.is_list_tight {
+                    self.is_list_tight = tight;
+                }
+
+                // if tight {
+                //     panic!();
+                // }
 
                 if self.list_origin.is_none() {
                     self.start_bullet_list(input, list_char);
@@ -121,7 +127,7 @@ impl CompileCx {
                     return;
                 }
 
-                self.insert_list_item(input.consumed);
+                self.insert_list_item(input.consumed, tight);
                 input.consumed += list_start;
 
                 if let Some(empty_line_ix) = input.scan_empty_line() {
@@ -141,7 +147,7 @@ impl CompileCx {
                 }
 
                 self.is_list_tight = tight;
-                self.insert_list_item(input.consumed);
+                self.insert_list_item(input.consumed, tight);
                 input.consumed += list_start;
 
                 if let Some(empty_line_ix) = input.scan_empty_line() {
@@ -179,6 +185,10 @@ impl CompileCx {
     fn parse_paragraph(&mut self, input: &mut Input<'_>) {
         let old = input.consumed;
 
+        if input.eof() {
+            return;
+        }
+
         while !input.eof() {
             if let Some((level, ix)) = input.scan_setext_heading() {
                 self.parse_setext_heading(level, input, old, ix);
@@ -192,13 +202,9 @@ impl CompileCx {
             input.consumed += 1;
         }
 
-        if input.scan_two_newlines() {
-            input.consumed += 2;
-        }
-
-        if input.consumed == old {
-            return;
-        }
+        // if input.consumed == old {
+        //     return;
+        // }
 
         let pos = Position::new(old, input.consumed);
         let node = AstNode::new(crate::ast::Value::Paragraph, pos, 0);
@@ -298,10 +304,10 @@ impl CompileCx {
         self.tree.attach_node(node);
     }
 
-    fn insert_list_item(&mut self, start: usize) {
+    fn insert_list_item(&mut self, start: usize, tight: bool) {
         self.tree.attach_node(AstNode::new(
             Value::ListItem,
-            Position::new(start, start),
+            Position::new(start + (usize::from(tight) << 1), start),
             0,
         ));
 
@@ -544,12 +550,35 @@ mod tests {
 
     #[test]
     fn bullet_list() {
-        ast_test!(
-            "- This is a bullet list!\n\
+        const TEST: &str = "- This is a bullet list!\n\
             - Once again a cruel moment\n\
-            - Salt water.\n\
-            # meow"
+            - Salt water.\n";
+
+        test_ast!(TEST, Limit: 10, Strict: true,
+            (Value::BulletList { tight: false }, TEST),
+
+            (Value::ListItem, "- This is a bullet list!\n"),
+            (Value::Paragraph, "This is a bullet list!\n"),
+            (Value::Text, "This is a bullet list!\n"),
+
+            (Value::ListItem, "- Once again a cruel moment\n"),
+            (Value::Paragraph, "Once again a cruel moment\n"),
+            (Value::Text, "Once again a cruel moment\n"),
+
+            (Value::ListItem, "- Salt water.\n"),
+            (Value::Paragraph, "Salt water.\n"),
+            (Value::Text, "Salt water.\n"),
         );
+    }
+
+    #[test]
+    fn bullet_list_not_tight() {
+        const TEST: &str = "- This might be a list!\n\n\
+            - Ahaha!\n\
+            - Ahahaooao!!!!\n\
+            - Woof :3";
+
+        ast_test!(TEST);
     }
 
     #[test]
