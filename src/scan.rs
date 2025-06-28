@@ -1,7 +1,7 @@
 use std::num::{NonZero, NonZeroU8};
 
 pub(crate) struct Input<'i> {
-    bytes: &'i [u8],
+    pub bytes: &'i [u8],
     pub consumed: usize,
 }
 

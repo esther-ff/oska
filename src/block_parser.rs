@@ -202,9 +202,17 @@ impl CompileCx {
             }
         }
 
-        // if input.consumed == old {
-        //     return;
-        // }
+        // prevents a '\n\n' paragraph.
+        //
+        // Safety:
+        //
+        // The loop above guarantees that the range
+        // `old..input.consumed` is in bounds of the data slice.
+        unsafe {
+            if input.bytes.get_unchecked(old..input.consumed) == b"\n\n" {
+                return;
+            }
+        }
 
         let pos = Position::new(old, input.consumed);
         let node = AstNode::new(crate::ast::Value::Paragraph, pos, 0);
@@ -501,7 +509,14 @@ mod tests {
 
     #[test]
     fn all() {
-        ast_test!("This is a paragraph!\n\n# This is a heading.");
+        test_ast!(
+            "This is a paragraph!\n\n\
+            # This is a heading.", Limit: 4, Strict: true,
+            (Value::Paragraph, "This is a paragraph!"),
+            (Value::Text, "This is a paragraph!"),
+            (Value::Heading { level: core::num::NonZero::new(1).unwrap() }, "# This is a heading."),
+            (Value::Text, "This is a heading.")
+        );
     }
 
     #[test]
@@ -515,8 +530,11 @@ mod tests {
     }
 
     #[test]
-    fn heading() {
-        ast_test!("###### This is a level 6 heading.");
+    fn atx_heading() {
+        test_ast!("###### This is a level 6 heading.", Limit: 2, Strict: true,
+            (Value::Heading { level: core::num::NonZero::new(6).unwrap() }, "###### This is a level 6 heading."),
+            (Value::Text, "This is a level 6 heading.")
+        );
     }
 
     #[test]
@@ -627,24 +645,38 @@ mod tests {
 
     #[test]
     fn blockquote() {
-        ast_test!("> > > Blockquote");
+        test_ast!("> > > Blockquote", Limit: 5, Strict: true,
+            (Value::Blockquote, "> > > Blockquote"),
+            (Value::Blockquote, "> > Blockquote"),
+            (Value::Blockquote, "> Blockquote"),
+            (Value::Paragraph, "Blockquote"),
+            (Value::Text, "Blockquote")
+        );
     }
 
     #[test]
     fn style_break() {
-        ast_test!("------------");
+        test_ast!("------------", Limit: 1, Strict: true,
+            (Value::StyleBreak, "------------")
+        );
     }
 
     #[test]
     fn macro_md() {
-        ast_test!("<>= macro_test (argument1) (");
+        test_ast!("<>= macro_test (argument1) (", Limit: 1, Strict: true,
+            (Value::Macro { name: "macro_test".into() }, "<>= macro_test (argument1) (")
+        );
     }
 
     #[test]
     fn setext_heading() {
-        ast_test!(
+        test_ast!(
             "This is a setext heading!\n\
-            ========="
+            =========",
+            Limit: 2, Strict: true,
+            (Value::Heading { level: core::num::NonZero::new(1).unwrap() },"This is a setext heading!\n\
+            ========="),
+            (Value::Text, "This is a setext heading!\n")
         );
     }
 }
