@@ -116,10 +116,6 @@ impl CompileCx {
                     self.is_list_tight = tight;
                 }
 
-                // if tight {
-                //     panic!();
-                // }
-
                 if self.list_origin.is_none() {
                     self.start_bullet_list(input, list_char);
                 } else if self.bullet_list_marker != Some(list_char) {
@@ -127,7 +123,7 @@ impl CompileCx {
                     return;
                 }
 
-                self.insert_list_item(input.consumed, tight);
+                self.insert_list_item(input.consumed + (usize::from(tight) << 1));
                 input.consumed += list_start;
 
                 if let Some(empty_line_ix) = input.scan_empty_line() {
@@ -139,6 +135,10 @@ impl CompileCx {
             } else if let Some((list_start, list_char, start_index, tight)) =
                 input.scan_ordered_list()
             {
+                if !self.is_list_tight {
+                    self.is_list_tight = tight;
+                }
+
                 if self.list_origin.is_none() {
                     self.start_ordered_list(input, start_index, list_char);
                 } else if self.ordered_list_char != Some(list_char) {
@@ -146,9 +146,9 @@ impl CompileCx {
                     return;
                 }
 
-                self.is_list_tight = tight;
-                self.insert_list_item(input.consumed, tight);
-                input.consumed += list_start;
+                let offset = if tight { 2 } else { 0 };
+                self.insert_list_item(input.consumed + offset);
+                input.consumed += list_start + offset;
 
                 if let Some(empty_line_ix) = input.scan_empty_line() {
                     input.consumed += empty_line_ix;
@@ -190,6 +190,8 @@ impl CompileCx {
         }
 
         while !input.eof() {
+            input.consumed += 1;
+
             if let Some((level, ix)) = input.scan_setext_heading() {
                 self.parse_setext_heading(level, input, old, ix);
                 return;
@@ -198,8 +200,6 @@ impl CompileCx {
             if input.scan_interrupt_paragraph() {
                 break;
             }
-
-            input.consumed += 1;
         }
 
         // if input.consumed == old {
@@ -304,10 +304,10 @@ impl CompileCx {
         self.tree.attach_node(node);
     }
 
-    fn insert_list_item(&mut self, start: usize, tight: bool) {
+    fn insert_list_item(&mut self, start: usize) {
         self.tree.attach_node(AstNode::new(
             Value::ListItem,
-            Position::new(start + (usize::from(tight) << 1), start),
+            Position::new(start, start),
             0,
         ));
 
@@ -413,7 +413,7 @@ mod tests {
                         }
 
                         println!(
-                            "(order: {:>4}) (type: {:15?}) -> ({:5?})",
+                            "(order: {:>4}) (type: {:?}) -> ({:5?})",
                             self.idx,
                             val.value(),
                             txt,
@@ -506,11 +506,11 @@ mod tests {
 
     #[test]
     fn paragraph() {
-        // ast_test!("This is a paragraph!");
         test_ast!(
             "This is a paragraph!",
-            Limit: 1, Strict: true,
-            (Value::Paragraph, "This is a paragraph!")
+            Limit: 2, Strict: true,
+            (Value::Paragraph, "This is a paragraph!"),
+            (Value::Text, "This is a paragraph!")
         );
     }
 
@@ -533,6 +533,37 @@ mod tests {
             (Value::ListItem, "1. This is a ordered list >:3\n"),
             (Value::Paragraph, "This is a ordered list >:3\n"),
             (Value::Text, "This is a ordered list >:3\n"),
+
+            (Value::ListItem, "2. This is again a ordered list\n"),
+            (Value::Paragraph, "This is again a ordered list\n"),
+            (Value::Text, "This is again a ordered list\n"),
+
+            (Value::ListItem, "3. Now the fuss is over...!\n"),
+            (Value::Paragraph, "Now the fuss is over...!\n"),
+            (Value::Text, "Now the fuss is over...!\n"),
+
+            (Value::ListItem, "4. We must go to the fire\n"),
+            (Value::Paragraph, "We must go to the fire\n"),
+            (Value::Text, "We must go to the fire\n")
+        );
+    }
+
+    #[test]
+    fn ordered_list_tight() {
+        const TEST: &str = "1. This is a ordered list >:3\n\n\
+            2. This is again a ordered list\n\
+            3. Now the fuss is over...!\n\
+            4. We must go to the fire\n";
+
+        ast_test!(TEST);
+
+        test_ast!(
+            TEST, Limit: 13, Strict: true,
+            (Value::OrderedList { tight: true, start_index: 1 }, TEST),
+
+            (Value::ListItem, "1. This is a ordered list >:3"),
+            (Value::Paragraph, "This is a ordered list >:3"),
+            (Value::Text, "This is a ordered list >:3"),
 
             (Value::ListItem, "2. This is again a ordered list\n"),
             (Value::Paragraph, "This is again a ordered list\n"),
@@ -572,13 +603,26 @@ mod tests {
     }
 
     #[test]
-    fn bullet_list_not_tight() {
-        const TEST: &str = "- This might be a list!\n\n\
-            - Ahaha!\n\
-            - Ahahaooao!!!!\n\
-            - Woof :3";
+    fn bullet_list_tight() {
+        const TEST: &str = "- This is a bullet list!\n\n\
+            - Once again a cruel moment\n\
+            - Salt water.\n";
 
-        ast_test!(TEST);
+        test_ast!(TEST, Limit: 10, Strict: true,
+            (Value::BulletList { tight: true }, TEST),
+
+            (Value::ListItem, "- This is a bullet list!"),
+            (Value::Paragraph, "This is a bullet list!"),
+            (Value::Text, "This is a bullet list!"),
+
+            (Value::ListItem, "- Once again a cruel moment\n"),
+            (Value::Paragraph, "Once again a cruel moment\n"),
+            (Value::Text, "Once again a cruel moment\n"),
+
+            (Value::ListItem, "- Salt water.\n"),
+            (Value::Paragraph, "Salt water.\n"),
+            (Value::Text, "Salt water.\n"),
+        );
     }
 
     #[test]
